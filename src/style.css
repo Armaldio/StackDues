@@ -201,3 +201,6 @@ footer p { font-size: .7rem; color: var(--muted); }
   .form-grid { gap: .75rem; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+.content-columns.single-column { grid-template-columns: 1fr; }
+.infrastructure-section { margin-bottom: 2.5rem; }
