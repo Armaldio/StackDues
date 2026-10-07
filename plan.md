@@ -22,10 +22,14 @@ Plan
   - Implemented: responsive Vue dashboard, per-currency fixed monthly/annual equivalents, actual 30/90-day commitments, searchable subscription ledger, add/edit/delete and status controls.
   - Persistence: validated browser-local storage with read/write failure states and corruption protection; explicit example data is optional and never presented as real spend. This personal Pages workspace needs no account and does not upload manual subscriptions.
   - Verified: focused storage durability/error tests, production build, and real Chromium CRUD/persistence/status/mobile smoke checks. Infrastructure placeholders are replaced in PR 3.
-- [ ] PR 3 — Variable cost model + AWS
+- [x] PR 3 — Variable cost model + AWS
   - Add cost_snapshots / usage_costs separately from subscription definitions; keep actual metered spend immutable and timestamped.
   - Implement AWS Cost Explorer ingestion for month-to-date spend, previous period comparison, forecast if available, and optional service breakdown.
   - Acceptance: AWS appears beside fixed subscriptions without pretending it has a fixed renewal amount; dashboard totals distinguish committed vs estimated spend.
+  - Implemented: immutable, timestamped `CostSnapshot` model separate from fixed subscriptions; official server-only AWS Cost Explorer SDK adapter for MTD actuals, matched previous-period/full-month comparisons, service pagination, and whole-month forecasts when available.
+  - Dashboard: reported usage, service breakdowns, forecasts and per-currency fixed-plus-variable estimated totals; incomplete forecasts are identified instead of treating missing providers as zero. Current data is selected by the last successful capture.
+  - Safety: bounded requests, sanitized errors, validation, credits, overflow protection, no fake zero-cost snapshots, and no speculative connector contract. Missing comparison/forecast data preserves current actuals.
+  - Verified: focused AWS/usage/feed tests plus build and browser rendering; credentialed live ingestion is activated by repository secrets in PR 5.
 - [ ] PR 4 — Cloudflare ingestion
   - Add Cloudflare Billable Usage ingestion with billing-period total and useful service breakdowns such as Workers/R2 where returned.
   - Reuse only the genuinely shared pieces from AWS; extract a small connector contract now, not before this PR.
