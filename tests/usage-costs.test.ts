@@ -12,7 +12,7 @@ test('usage decimal normalization retains precision and billing credits', () => 
 })
 
 test('snapshot validation rejects invalid dates, amounts, currency and discriminators', () => {
-  for (const patch of [{ amount: NaN }, { amount: Infinity }, { amount: '12' }, { currency: 'usd' }, { currency: 'US' }, { periodStart: '2026-02-30' }, { periodEnd: '2026-10-01' }, { capturedAt: 'invalid' }, { provider: 'other' }, { kind: 'other' }]) assert.throws(() => createCostSnapshot({ ...base, ...patch } as CostSnapshot))
+  for (const patch of [{ amount: NaN }, { amount: Infinity }, { amount: '12' }, { currency: 'usd' }, { currency: 'US' }, { periodStart: '2026-02-30' }, { periodEnd: '2026-10-01' }, { capturedAt: 'invalid' }, { capturedAt: '2026-02-30T12:00:00Z' }, { capturedAt: '2026-10-07T24:00:00Z' }, { capturedAt: '0000-01-01T12:00:00Z' }, { provider: 'other' }, { kind: 'other' }]) assert.throws(() => createCostSnapshot({ ...base, ...patch } as CostSnapshot))
 })
 
 test('snapshots clone and deeply freeze metadata so later response mutation cannot rewrite history', () => {

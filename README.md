@@ -35,3 +35,30 @@ Provider setup and scheduled public feed deployment are added in PR 5. Credentia
 The server adapter uses [Cloudflare PayGo Billable Usage v1](https://developers.cloudflare.com/api/resources/billing/subresources/usage/methods/paygo/), summing `ContractedCost` charge rows with returned Workers/R2/service breakdowns. Running cumulative costs and consumption quantities are never mistaken for prices. Billing currency, credits and billing-period groups are preserved.
 
 The API reports charge intervals rather than a full billing-cycle end, so the dashboard labels these as billing-period-to-date actuals without inventing a forecast. Empty responses remain unavailable. A tiny shared refresh contract is introduced now that both adapters exist. Each provider refreshes independently; failed collections cannot replace successful history or another provider's costs.
+
+## Provider setup
+
+This personal app is hosted at **https://armaldio.github.io/billing/**. GitHub Pages serves the dashboard; trusted GitHub Actions jobs call billing APIs. Manual subscriptions stay in your browser. Provider observations published to this public site are public, including their cost history. No provider credentials are published.
+
+1. In the repository's **Settings → Secrets and variables → Actions**, add the provider secrets below. Never create `VITE_` secrets or enter keys in the dashboard.
+2. For AWS, enable Cost Explorer and grant the credential identity only the billing read permissions it needs: `ce:GetCostAndUsage` and `ce:GetCostForecast`. Add `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN` for temporary credentials. Temporary credentials expire and must be renewed; a dedicated read-only identity is appropriate for unattended use. The adapter uses Cost Explorer's `us-east-1` endpoint.
+3. For Cloudflare, create an account-scoped token with **Billing Read** permission, then add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. The PayGo API is for supported self-serve accounts; unavailable API access appears as a failed sync, not zero spend.
+4. When you want to publish metered costs publicly, add the repository **variable** `PUBLISH_PROVIDER_COSTS` with value `true`. Publication defaults off even when secrets are present. Turning it off publishes an empty provider feed on the next deployment; already downloaded public data cannot be recalled.
+5. Run **Actions → Refresh costs and deploy Pages → Run workflow**. Reload cost data in the dashboard after the deployment finishes. The button reads published observations; provider ingestion happens in Actions, not in the browser.
+
+The workflow refreshes and deploys on main changes, manual dispatch, and every six hours at minute 17 UTC. GitHub schedules can be delayed, and GitHub can disable scheduled jobs in inactive repositories. Last-successful sync dates, failure messages and a 36-hour stale warning make missing refreshes visible. The browser reloads the feed every 15 minutes while open.
+
+Each deployment recovers the prior published feed before appending new captures. Provider failures preserve prior observations and the other provider's success. A network/validation failure recovering history stops publication rather than erasing history. Records are immutable; the dashboard shows the 30 most recent observations while the published feed retains full history.
+
+No provider credentials were configured during initial deployment, so live account ingestion has not been authenticated against your accounts. Adapters and independent failure paths are covered with realistic API fixtures; the initial site accurately shows Not connected.
+
+## Verification and deployment
+
+- `npm test`: focused recurrence, renewal, normalization, storage, adapter, failure-isolation and history-publication tests.
+- `npm run build`: application, server script and test type checking plus the production Pages build.
+- `npm run test:e2e`: Chromium CRUD/persistence, currency separation, keyboard dialog, responsive layout, provider failure/staleness/history checks against the built app. Run `npx playwright install chromium` once, or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing Chromium binary.
+- `npm run refresh:costs`: trusted server-side refresh using environment variables. Publication is opt-in; the command never asks the browser for secrets.
+
+GitHub Actions CI runs tests, type checking/build, Chromium checks, and a dependency audit. The Pages workflow builds and validates before using provider secrets in its dedicated ingestion step. It publishes only `dist`, never source files or secret environment variables. Roll back by reverting a change on main and letting the same deployment workflow rebuild it; prior provider history is recovered from the published feed.
+
+The Pages base path is `/billing/`, including the cost feed and favicon. Development opens at `http://localhost:5173/billing/`. There is no cloud account system or cross-device subscription synchronization in this personal V1 workspace.

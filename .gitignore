@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Server-side credentials and browser test artifacts
+.env
+.env.*
+!.env.example
+*.pem
+test-results/
+playwright-report/

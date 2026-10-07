@@ -123,9 +123,9 @@ tbody tr:last-child > * { border-bottom: 0; }
 .history-placeholder { border-top: 1px solid var(--line); margin-top: 2.5rem; padding-top: 1.5rem; scroll-margin-top: 1.5rem; }
 .history-placeholder h2 { font-size: 1.2rem; margin-bottom: .5rem; }
 .history-placeholder p { font-size: .75rem; }
-footer { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding-top: 2rem; margin-top: 2rem; border-top: 1px solid var(--line); }
-footer > span { font: 600 1.2rem var(--display); }
-footer p { font-size: .7rem; color: var(--muted); }
+.app-footer { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding-top: 2rem; margin-top: 2rem; border-top: 1px solid var(--line); }
+.app-footer > span { font: 600 1.2rem var(--display); }
+.app-footer p { font-size: .7rem; color: var(--muted); }
 .subscription-dialog { width: min(540px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); overflow-y: auto; padding: 2rem; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); box-shadow: 0 20px 60px #272e2930; }
 .subscription-dialog::backdrop { background: #272e2966; }
 .dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
@@ -194,8 +194,8 @@ footer p { font-size: .7rem; color: var(--muted); }
   .ledger-empty { flex-direction: column; align-items: flex-start; gap: 1.25rem; padding: 1.5rem; }
   .empty-mark { width: 3rem; height: 3rem; }
   .empty-actions { flex-direction: column; align-items: flex-start; gap: .5rem; }
-  footer { align-items: flex-start; }
-  footer p { max-width: 220px; text-align: right; }
+  .app-footer { align-items: flex-start; }
+  .app-footer p { max-width: 220px; text-align: right; }
   .subscription-dialog { padding: 1.25rem; }
   .dialog-header h2 { font-size: 1.5rem; }
   .form-grid { gap: .75rem; }

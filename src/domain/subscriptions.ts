@@ -50,12 +50,14 @@ export function createSubscription(input: Subscription): Subscription {
   if (!Object.hasOwn(YEAR_FREQUENCY, input.recurrenceUnit)) throw new Error('Recurrence unit must be day, week, month or year')
   if (!['active', 'paused', 'cancelled'].includes(input.status)) throw new Error('Subscription status must be active, paused or cancelled')
   calendarDate(input.nextRenewalAt)
+  normalizeCost(input)
   return { id, name, provider, billingType: 'fixed', amount: input.amount, currency: input.currency, recurrenceInterval: input.recurrenceInterval, recurrenceUnit: input.recurrenceUnit, nextRenewalAt: input.nextRenewalAt, status: input.status }
 }
 
 /** A comparison rate using 365 days / 12 months per year; never changes the actual charge. */
 export function normalizeCost(subscription: Subscription): NormalizedCost {
   const yearly = subscription.amount / subscription.recurrenceInterval * YEAR_FREQUENCY[subscription.recurrenceUnit]
+  if (!Number.isFinite(yearly)) throw new Error('Normalized cost must be a finite number')
   return { monthly: yearly / 12, yearly }
 }
 
@@ -68,6 +70,7 @@ export function normalizedTotals(subscriptions: readonly Subscription[]): Curren
     const total = totals.get(subscription.currency) ?? { currency: subscription.currency, monthly: 0, yearly: 0 }
     total.monthly += cost.monthly
     total.yearly += cost.yearly
+    if (!Number.isFinite(total.monthly) || !Number.isFinite(total.yearly)) throw new Error('Subscription total must be a finite number')
     totals.set(subscription.currency, total)
   }
   return [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency))
@@ -135,4 +138,15 @@ export function upcomingRenewals(subscriptions: readonly Subscription[], start: 
     }
   }
   return renewals.sort((a, b) => a.date.localeCompare(b.date) || a.subscription.id.localeCompare(b.subscription.id))
+}
+
+/** Sum scheduled original charges, independently of normalized comparison rates. */
+export function renewalChargeTotals(renewals: readonly Renewal[]): { currency: string; amount: number }[] {
+  const totals = new Map<string, number>()
+  for (const renewal of renewals) {
+    const amount = (totals.get(renewal.currency) ?? 0) + renewal.amount
+    if (!Number.isFinite(amount)) throw new Error('Renewal total exceeds the supported numeric range')
+    totals.set(renewal.currency, amount)
+  }
+  return [...totals].sort(([a], [b]) => a.localeCompare(b)).map(([currency, amount]) => ({ currency, amount }))
 }

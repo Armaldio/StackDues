@@ -30,6 +30,13 @@ function validDate(value: string): boolean {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
+/** Capture/sync timestamps use UTC and must not silently normalize an invalid calendar date. */
+export function isValidCostTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value) || !validDate(value.slice(0, 10))) return false
+  const parsed = new Date(value)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value.slice(0, 10)
+}
+
 /** Signed amounts allow genuine billing credits; malformed or nonfinite values never become zero. */
 export function normalizeUsageAmount(value: unknown): number {
   if (typeof value !== 'number' && (typeof value !== 'string' || !/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value))) {
@@ -56,7 +63,7 @@ export function createCostSnapshot(input: CostSnapshot): CostSnapshot {
   const amount = normalizeUsageAmount(input.amount)
   if (typeof input.currency !== 'string' || !/^[A-Z]{3}$/.test(input.currency)) throw new Error('Invalid cost currency')
   if (!['actual', 'forecast'].includes(input.kind)) throw new Error('Invalid snapshot kind')
-  if (typeof input.capturedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(input.capturedAt) || !Number.isFinite(Date.parse(input.capturedAt))) throw new Error('Invalid capture timestamp')
+  if (!isValidCostTimestamp(input.capturedAt)) throw new Error('Invalid capture timestamp')
   return Object.freeze({ ...input, id: input.id.trim(), amount, metadata: input.metadata ? freezeMetadata(input.metadata) as Readonly<Record<string, unknown>> : undefined })
 }
 
