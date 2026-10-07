@@ -46,6 +46,7 @@ Plan
   - Credential handling: provider SDK/API calls run only in trusted Actions jobs using repository secrets. The frontend receives an allowlisted financial feed. Public provider-cost publication requires `PUBLISH_PROVIDER_COSTS=true`; manual subscriptions remain browser-local.
   - Hardening: finite financial totals, strict capture/sync timestamps, atomic writes, fail-safe previous-history recovery, clean Pages asset paths, CI tests/build/browser checks/audit, and documentation for setup/rollback.
   - Verified: 68 focused tests, two Chromium production-build scenarios (CRUD/persistence, separate currencies, keyboard modal, responsive layouts, provider errors/staleness/history), type checking/build and zero dependency-audit vulnerabilities. Three parallel domain/provider/UI workers were integrated and reviewed.
+  - CI delivery repair: the first post-merge browser-dependency installation stalled on the hosted Ubuntu apt mirror. CI now uses the preinstalled stable Chrome on the verified Ubuntu 24.04 runner while retaining the full browser test gate.
   - Delivery: the Pages workflow publishes main automatically to https://armaldio.github.io/billing/ and can be manually dispatched. Deployment status and the live rendered site are verified before the final delivery report.
   - External setup: no AWS/Cloudflare secrets are currently configured. Live authenticated account ingestion cannot be verified until the repository owner adds them; the deployed app accurately shows Not connected and does not invent costs.
 Explicitly defer
