@@ -30,10 +30,14 @@ Plan
   - Dashboard: reported usage, service breakdowns, forecasts and per-currency fixed-plus-variable estimated totals; incomplete forecasts are identified instead of treating missing providers as zero. Current data is selected by the last successful capture.
   - Safety: bounded requests, sanitized errors, validation, credits, overflow protection, no fake zero-cost snapshots, and no speculative connector contract. Missing comparison/forecast data preserves current actuals.
   - Verified: focused AWS/usage/feed tests plus build and browser rendering; credentialed live ingestion is activated by repository secrets in PR 5.
-- [ ] PR 4 — Cloudflare ingestion
+- [x] PR 4 — Cloudflare ingestion
   - Add Cloudflare Billable Usage ingestion with billing-period total and useful service breakdowns such as Workers/R2 where returned.
   - Reuse only the genuinely shared pieces from AWS; extract a small connector contract now, not before this PR.
   - Acceptance: AWS and Cloudflare refresh independently, failures are visible, and one broken provider cannot block the other or corrupt previous snapshots.
+  - Implemented: server-only Cloudflare PayGo Billable Usage adapter, summed priced charge rows grouped by billing period/currency with returned service breakdowns. Running cumulative values and unpriced consumption are never summed as spend.
+  - API limitation: billing-period end/forecast is not returned; snapshots retain reported charge intervals and explicitly mark projection unavailable. Empty results remain unavailable, not a manufactured zero.
+  - Shared behavior extracted only after both adapters: a small provider/configured/collect contract, independent refreshes, immutable appended history, atomic validation, sanitized per-provider failures, preserved last successful snapshots and sync dates.
+  - Verified: 14 focused Cloudflare/sync tests cover priced fields, malformed data, missing configuration, authentication/network/timeouts, pagination safeguards, provider isolation and failure recovery; build passes.
 - [ ] PR 5 — Product hardening
   - Add scheduled refreshes, last_synced_at, sync status/error states, stale-data warnings, basic history, and credential handling using server-side secrets only.
   - Split work between subagents: one for recurrence/financial calculations + tests, one for AWS/Cloudflare API research and adapters, one for dashboard UX; final agent integrates and removes unnecessary abstractions.

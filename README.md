@@ -29,3 +29,9 @@ Manual subscriptions persist in this browser's local storage. No account is requ
 The AWS adapter runs only on the server/in GitHub Actions using the official Cost Explorer SDK. It collects month-to-date UnblendedCost through the previous UTC day, comparable previous-month days, full previous-month spend, service breakdowns, and available forecasts. Pagination, unavailable history/forecasts, malformed responses and sanitized errors have focused tests. [AWS Cost Explorer API reference](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsage.html) describes the source data.
 
 Provider setup and scheduled public feed deployment are added in PR 5. Credentials are never entered into the dashboard or bundled into frontend JavaScript.
+
+## Cloudflare and independent refresh (PR 4)
+
+The server adapter uses [Cloudflare PayGo Billable Usage v1](https://developers.cloudflare.com/api/resources/billing/subresources/usage/methods/paygo/), summing `ContractedCost` charge rows with returned Workers/R2/service breakdowns. Running cumulative costs and consumption quantities are never mistaken for prices. Billing currency, credits and billing-period groups are preserved.
+
+The API reports charge intervals rather than a full billing-cycle end, so the dashboard labels these as billing-period-to-date actuals without inventing a forecast. Empty responses remain unavailable. A tiny shared refresh contract is introduced now that both adapters exist. Each provider refreshes independently; failed collections cannot replace successful history or another provider's costs.
