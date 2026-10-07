@@ -9,6 +9,7 @@ export default defineConfig({
   retries: 0,
   reporter: 'list',
   use: {
+    channel: process.env.CI ? 'chrome' : undefined,
     baseURL, locale: 'en-US', viewport: { width: 1440, height: 1000 },
     launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH },
     screenshot: 'only-on-failure', trace: 'retain-on-failure',
