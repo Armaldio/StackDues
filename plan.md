@@ -14,7 +14,7 @@ Plan
   - Acceptance: Bitwarden yearly, Hostinger every 4 years, and a monthly VPS can coexist and produce correct upcoming-renewal + normalized-cost calculations.
   - Implemented: `src/domain/subscriptions.ts` provides fixed subscription creation/validation, monthly/yearly normalization grouped by currency, and anchored UTC renewal calculations with inclusive date windows.
   - Verified: focused Node tests cover the acceptance examples, arbitrary intervals, month-end/leap-year behavior, input validation, inactive status, currency separation, and date-range boundaries; `npm run build` type-checks application and tests.
-  - Scope: this is the domain ledger only. Persistence and manual entry are pending PR 2; accounts/hosting are not implemented. Metered spend remains a separate future model. Day/week equivalents use a 365-day year; no FX conversion is implied.
+  - Scope at PR 1 completion: domain ledger only; persistence/manual entry were subsequently implemented in PR 2, and hosting in PR 5. The personal Pages workspace needs no account system. Metered spend remains a separate future model. Day/week equivalents use a 365-day year; no FX conversion is implied.
 - [x] PR 2 — Dashboard & commitments
   - Build the main dashboard with current normalized monthly cost, annual commitments, upcoming 30/90-day renewals, and fixed-vs-variable split.
   - Add a simple subscriptions CRUD flow; prioritize fast manual entry over logos, vendor catalogs, tags, or advanced organization.
@@ -29,7 +29,7 @@ Plan
   - Implemented: immutable, timestamped `CostSnapshot` model separate from fixed subscriptions; official server-only AWS Cost Explorer SDK adapter for MTD actuals, matched previous-period/full-month comparisons, service pagination, and whole-month forecasts when available.
   - Dashboard: reported usage, service breakdowns, forecasts and per-currency fixed-plus-variable estimated totals; incomplete forecasts are identified instead of treating missing providers as zero. Current data is selected by the last successful capture.
   - Safety: bounded requests, sanitized errors, validation, credits, overflow protection, no fake zero-cost snapshots, and no speculative connector contract. Missing comparison/forecast data preserves current actuals.
-  - Verified: focused AWS/usage/feed tests plus build and browser rendering; credentialed live ingestion is activated by repository secrets in PR 5.
+  - Verified: focused AWS/usage/feed tests plus build and browser rendering; live ingestion is wired by PR 5 and requires repository secrets.
 - [x] PR 4 — Cloudflare ingestion
   - Add Cloudflare Billable Usage ingestion with billing-period total and useful service breakdowns such as Workers/R2 where returned.
   - Reuse only the genuinely shared pieces from AWS; extract a small connector contract now, not before this PR.
@@ -38,10 +38,16 @@ Plan
   - API limitation: billing-period end/forecast is not returned; snapshots retain reported charge intervals and explicitly mark projection unavailable. Empty results remain unavailable, not a manufactured zero.
   - Shared behavior extracted only after both adapters: a small provider/configured/collect contract, independent refreshes, immutable appended history, atomic validation, sanitized per-provider failures, preserved last successful snapshots and sync dates.
   - Verified: 14 focused Cloudflare/sync tests cover priced fields, malformed data, missing configuration, authentication/network/timeouts, pagination safeguards, provider isolation and failure recovery; build passes.
-- [ ] PR 5 — Product hardening
+- [x] PR 5 — Product hardening
   - Add scheduled refreshes, last_synced_at, sync status/error states, stale-data warnings, basic history, and credential handling using server-side secrets only.
   - Split work between subagents: one for recurrence/financial calculations + tests, one for AWS/Cloudflare API research and adapters, one for dashboard UX; final agent integrates and removes unnecessary abstractions.
   - Acceptance: the app is usable daily with no manual maintenance except adding/changing subscriptions, and the architecture is ready for connector #3 without introducing a plugin framework.
+  - Implemented: six-hour GitHub Actions refreshes, provider last-attempt/last-success status, failure recovery and immutable history across deployments, 36-hour stale warnings, browser feed reloads, recent history table, and actual 365-day fixed commitments alongside normalized rates.
+  - Credential handling: provider SDK/API calls run only in trusted Actions jobs using repository secrets. The frontend receives an allowlisted financial feed. Public provider-cost publication requires `PUBLISH_PROVIDER_COSTS=true`; manual subscriptions remain browser-local.
+  - Hardening: finite financial totals, strict capture/sync timestamps, atomic writes, fail-safe previous-history recovery, clean Pages asset paths, CI tests/build/browser checks/audit, and documentation for setup/rollback.
+  - Verified: 68 focused tests, two Chromium production-build scenarios (CRUD/persistence, separate currencies, keyboard modal, responsive layouts, provider errors/staleness/history), type checking/build and zero dependency-audit vulnerabilities. Three parallel domain/provider/UI workers were integrated and reviewed.
+  - Delivery: the Pages workflow publishes main automatically to https://armaldio.github.io/billing/ and can be manually dispatched. Deployment status and the live rendered site are verified before the final delivery report.
+  - External setup: no AWS/Cloudflare secrets are currently configured. Live authenticated account ingestion cannot be verified until the repository owner adds them; the deployed app accurately shows Not connected and does not invent costs.
 Explicitly defer
 Do not include these in V1 unless a real usage problem demands them:
 - generic connector SDK / marketplace

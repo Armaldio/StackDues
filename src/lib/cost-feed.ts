@@ -1,4 +1,4 @@
-import { createCostSnapshot, type CostProvider, type CostSnapshot } from '../domain/usage-costs.ts'
+import { createCostSnapshot, isValidCostTimestamp, type CostProvider, type CostSnapshot } from '../domain/usage-costs.ts'
 
 export type ProviderSyncStatus = Readonly<{
   status: 'not-configured' | 'synced' | 'error'
@@ -21,7 +21,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 function timestamp(value: unknown): string | undefined {
   if (value === undefined) return undefined
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(Date.parse(value))) throw new Error('Invalid sync timestamp')
+  if (!isValidCostTimestamp(value)) throw new Error('Invalid sync timestamp')
   return value
 }
 

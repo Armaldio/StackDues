@@ -1,7 +1,11 @@
 {
   "snapshots": [],
   "providers": {
-    "aws": { "status": "not-configured" },
-    "cloudflare": { "status": "not-configured" }
+    "aws": {
+      "status": "not-configured"
+    },
+    "cloudflare": {
+      "status": "not-configured"
+    }
   }
 }

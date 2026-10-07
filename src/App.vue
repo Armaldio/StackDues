@@ -2,12 +2,15 @@
 import { computed, onUnmounted, ref } from 'vue'
 import SubscriptionForm from './components/SubscriptionForm.vue'
 import InfrastructurePanel from './components/InfrastructurePanel.vue'
-import { createSubscription, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
+import CostHistory from './components/CostHistory.vue'
+import { emptyCostFeed } from './lib/cost-feed'
+import { createSubscription, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
 import { loadSubscriptions, saveSubscriptions, type LedgerStorage } from './lib/subscription-storage'
 
 function browserStorage(): LedgerStorage {
   try { return window.localStorage } catch { return { getItem() { throw new Error('Storage unavailable') }, setItem() { throw new Error('Storage unavailable') }, removeItem() {} } }
 }
+const costFeed = ref(emptyCostFeed())
 const storage = browserStorage()
 const loaded = loadSubscriptions(storage)
 const subscriptions = ref(loaded.subscriptions)
@@ -26,15 +29,15 @@ const activeCount = computed(() => subscriptions.value.filter((item) => item.sta
 const totals = computed(() => normalizedTotals(subscriptions.value))
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
 const renewals = computed(() => upcomingRenewals(subscriptions.value, today.value, endDate(windowDays.value)))
-function chargeTotals(charges: Renewal[]) {
-  const values = new Map<string, number>()
-  for (const charge of charges) values.set(charge.currency, (values.get(charge.currency) ?? 0) + charge.amount)
-  return [...values].sort(([a], [b]) => a.localeCompare(b)).map(([currency, amount]) => ({ currency, amount }))
+function chargeTotals(charges: Renewal[]): { currency: string; amount: number | null }[] {
+  try { return renewalChargeTotals(charges) }
+  catch { return [...new Set(charges.map(charge => charge.currency))].sort().map(currency => ({ currency, amount: null })) }
 }
 const due30 = computed(() => chargeTotals(upcomingRenewals(subscriptions.value, today.value, endDate(30))))
+const due365 = computed(() => chargeTotals(upcomingRenewals(subscriptions.value, today.value, endDate(365))))
 const due90 = computed(() => chargeTotals(upcomingRenewals(subscriptions.value, today.value, endDate(90))))
 const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
-function money(amount: number, currency: string) { try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
+function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
 function recurrence(item: Subscription) { return `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` }
 function openForm(item?: Subscription) { editing.value = item; showForm.value = true }
@@ -74,7 +77,7 @@ function loadExamples() {
       <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
       <section class="summary" aria-label="Fixed subscription summary">
         <div class="monthly-summary"><div class="metric-label"><span>Fixed monthly equivalent</span><span class="small-label">{{ activeCount }} active</span></div><template v-if="totals.length"><div v-for="total in totals" :key="total.currency" class="monthly-value">{{ money(total.monthly, total.currency) }}<span>/ mo</span></div></template><p v-else class="monthly-value">—<span>/ mo</span></p><p class="metric-note">Your active charges spread over their billing cycles.</p></div>
-        <div class="secondary-metrics"><div class="metric"><p class="metric-label">Annual equivalent</p><p v-for="total in totals" :key="total.currency" class="metric-value">{{ money(total.yearly, total.currency) }}</p><p v-if="!totals.length" class="metric-value">—</p><p class="metric-note">Normalized rate, not this year’s bill.</p></div><div class="metric"><p class="metric-label">Due in 30 days</p><p v-for="total in due30" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due30.length" class="metric-value">—</p><p class="metric-note">Actual upcoming charges.</p></div><div class="metric"><p class="metric-label">Due in 90 days</p><p v-for="total in due90" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due90.length" class="metric-value">—</p><p class="metric-note">Includes the next 30 days.</p></div></div>
+        <div class="secondary-metrics"><div class="metric"><p class="metric-label">Annual equivalent</p><p v-for="total in totals" :key="total.currency" class="metric-value">{{ money(total.yearly, total.currency) }}</p><p v-if="!totals.length" class="metric-value">—</p><p class="metric-note">Normalized rate, not this year’s bill.</p><p v-for="total in due365" :key="total.currency" class="metric-note">{{ money(total.amount, total.currency) }} due in 365 days.</p></div><div class="metric"><p class="metric-label">Due in 30 days</p><p v-for="total in due30" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due30.length" class="metric-value">—</p><p class="metric-note">Actual upcoming charges.</p></div><div class="metric"><p class="metric-label">Due in 90 days</p><p v-for="total in due90" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due90.length" class="metric-value">—</p><p class="metric-note">Includes the next 30 days.</p></div></div>
       </section>
       <p class="summary-footnote">Currencies are kept separate. Renewal windows include today · {{ dateLabel(today) }} UTC.</p>
       <div class="content-columns single-column">
@@ -88,9 +91,9 @@ function loadExamples() {
         <div v-if="!subscriptions.length" class="ledger-empty"><span class="empty-mark" aria-hidden="true">＋</span><div><h3>Start with what you pay.</h3><p>Add a subscription, a domain, or a VPS. Monthly, yearly, or every four years — it all belongs here.</p><div class="empty-actions"><button class="primary-button" :disabled="blocked" @click="openForm()">Add your first subscription</button><button class="text-button" :disabled="blocked" @click="loadExamples">Try example subscriptions <span aria-hidden="true">↗</span></button></div></div></div>
         <div v-else class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in ledger`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
-      <InfrastructurePanel :fixed-totals="totals" :today="today" />
-      <section id="history" class="history-placeholder" aria-labelledby="history-title"><h2 id="history-title">History</h2><p class="muted">Provider snapshots will appear here when infrastructure is connected.</p></section>
-      <footer><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved in this browser. Clearing browser data removes them.</p></footer>
+      <InfrastructurePanel :fixed-totals="totals" :today="today" @loaded="costFeed = $event" />
+      <CostHistory :snapshots="costFeed.snapshots" />
+      <footer class="app-footer"><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved in this browser. Clearing browser data removes them.</p></footer>
     </main>
   </div>
   <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-error="storageError" @save="save" @close="showForm = false" />

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { latestCostSnapshots, usageTotals, type CostBreakdown, type CostProvider } from '../domain/usage-costs'
 import type { CurrencyTotal } from '../domain/subscriptions'
-import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale } from '../lib/cost-feed'
+import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, type CostFeed } from '../lib/cost-feed'
 
 const props = defineProps<{ fixedTotals: CurrencyTotal[]; today: string }>()
+const emit = defineEmits<{ loaded: [feed: CostFeed] }>()
 const feed = ref(emptyCostFeed())
 const loading = ref(false)
 const error = ref('')
@@ -12,7 +13,7 @@ const providers: CostProvider[] = ['aws', 'cloudflare']
 const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
 const totals = computed(() => usageTotals(activeSnapshots.value, props.today))
 const latest = computed(() => latestCostSnapshots(activeSnapshots.value).filter(row => row.kind === 'actual' && row.metadata?.period === 'current'))
-const combined = computed(() => totals.value.map(total => ({ ...total, fixed: props.fixedTotals.find(row => row.currency === total.currency)?.monthly ?? 0 })))
+const combined = computed(() => totals.value.map(total => ({ ...total, fixed: props.fixedTotals.find(row => row.currency === total.currency)?.monthly ?? 0, fixedYearly: props.fixedTotals.find(row => row.currency === total.currency)?.yearly ?? 0 })))
 function money(amount: number, currency: string) { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount) }
 function date(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
 function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : 'Cloudflare' }
@@ -33,24 +34,27 @@ function breakdown(value: unknown): readonly CostBreakdown[] { return Array.isAr
 async function reload() {
   if (loading.value) return
   loading.value = true
-  try { feed.value = await fetchCostFeed(`${import.meta.env.BASE_URL}data/costs.json`); error.value = '' }
+  try { feed.value = await fetchCostFeed(`${import.meta.env.BASE_URL}data/costs.json`); error.value = ''; emit('loaded', feed.value) }
   catch { error.value = 'Infrastructure data could not be loaded. Previous observations are still displayed. Try again.' }
   finally { loading.value = false }
 }
-onMounted(reload)
+let timer: ReturnType<typeof setInterval> | undefined
+onMounted(() => { void reload(); timer = setInterval(() => { void reload() }, 15 * 60 * 1000) })
+onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
 </script>
 
 <template>
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
     <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><button type="button" class="secondary-button" :disabled="loading" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button></div>
-    <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it.</p>
+    <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
     <p v-if="error" role="alert" class="feed-warning">{{ error }}</p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
         <p class="eyebrow">{{ total.currency }} · current reported period</p><strong>{{ total.hasActual ? money(total.actual, total.currency) : 'Unavailable' }}</strong><span>Actual metered spend</span>
         <p v-if="total.hasForecast">{{ money(total.estimatedMonthly, total.currency) }} forecast / month · {{ money(total.estimatedYearly, total.currency) }} annualized estimate</p>
         <p v-else>Monthly forecast unavailable</p>
-        <p v-if="total.hasForecast && total.estimationComplete" class="combined-total">{{ money(total.fixed + total.estimatedMonthly, total.currency) }} estimated monthly total, including fixed commitments</p>
+        <p v-if="total.hasForecast && total.estimationComplete" class="combined-total">{{ money(total.fixed + total.estimatedMonthly, total.currency) }} tracked estimated monthly total, including fixed commitments</p>
+        <p v-if="total.hasForecast && total.estimationComplete" class="combined-total">{{ Number.isFinite(total.fixedYearly + total.estimatedYearly) ? money(total.fixedYearly + total.estimatedYearly, total.currency) : 'Annual total unavailable' }} tracked annualized estimate</p>
         <p v-if="total.hasForecast && !total.estimationComplete" class="feed-warning">Forecast covers only some providers. A combined total is unavailable.</p>
       </div>
     </div>
@@ -72,7 +76,7 @@ onMounted(reload)
           </div>
         </template>
         <p v-else class="provider-empty">{{ feed.providers[provider].status === 'not-configured' ? 'Connect your account to see reported usage costs here.' : 'No reported charges are available yet.' }}</p>
-        <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span></footer>
+        <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>
     <details class="provider-setup"><summary>Connect AWS or Cloudflare</summary><p>Provider credentials are stored in GitHub repository secrets and used by scheduled jobs. Never enter provider keys in this dashboard.</p><p>This site is public. Publishing provider costs makes those cost snapshots public; manual subscriptions stay in your browser.</p><p>Follow the <a href="https://github.com/Armaldio/billing#provider-setup">provider setup guide</a>, then run the <a href="https://github.com/Armaldio/billing/actions/workflows/pages.yml">refresh and deployment workflow</a>. Reloading this page reads the latest published observations; it does not call your provider.</p></details>

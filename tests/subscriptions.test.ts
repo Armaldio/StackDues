@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   createSubscription,
   normalizeCost,
+  renewalChargeTotals,
   normalizedTotals,
   nextRenewalOnOrAfter,
   upcomingRenewals,
@@ -109,6 +110,22 @@ test('invalid monetary inputs are rejected', () => {
   for (const currency of ['', 'US', 'USDD', 'usd', 'U$D']) assert.throws(() => createSubscription({ ...vps, currency }), /currency/i)
 })
 
+test('finite charges cannot overflow their normalized yearly costs', () => {
+  assert.throws(() => createSubscription({ ...vps, amount: Number.MAX_VALUE, recurrenceUnit: 'day' }), /normalized cost/i)
+  assert.throws(() => normalizeCost({ ...vps, amount: Number.MAX_VALUE }), /normalized cost/i)
+  const yearly = createSubscription({ ...vps, amount: Number.MAX_VALUE, recurrenceUnit: 'year' })
+  assert.equal(normalizeCost(yearly).yearly, Number.MAX_VALUE)
+  assert.ok(Number.isFinite(normalizeCost(yearly).monthly))
+})
+
+test('aggregating individually finite commitments cannot return infinite totals', () => {
+  const yearly = createSubscription({ ...vps, amount: Number.MAX_VALUE, recurrenceUnit: 'year' })
+  assert.throws(() => normalizedTotals([yearly, { ...yearly, id: 'other' }]), /total/i)
+  assert.deepEqual(normalizedTotals([yearly, { ...yearly, id: 'paused', status: 'paused' }]), [
+    { currency: 'USD', monthly: Number.MAX_VALUE / 12, yearly: Number.MAX_VALUE },
+  ])
+})
+
 test('invalid recurrence intervals and calendar dates are rejected', () => {
   for (const recurrenceInterval of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => createSubscription({ ...vps, recurrenceInterval }), /interval/i)
   for (const nextRenewalAt of ['0000-01-01', '2026-02-29', '2026-04-31', '2026-13-01', '2026-1-01', 'not a date', '2026-01-01T00:00:00Z']) assert.throws(() => createSubscription({ ...vps, nextRenewalAt }), /date/i)
@@ -127,4 +144,12 @@ test('invalid query dates and inverted renewal windows are rejected', () => {
   assert.throws(() => nextRenewalOnOrAfter(vps, '2026-02-30'), /date/i)
   assert.throws(() => upcomingRenewals([], '2026-02-30', '2026-03-01'), /date/i)
   assert.throws(() => upcomingRenewals([], '2026-03-01', '2026-02-01'), /window/i)
+})
+
+test('upcoming commitment totals group original charges by currency and reject overflow', () => {
+  const charges = upcomingRenewals([vps, { ...vps, id: 'euro', currency: 'EUR', amount: 8 }], '2026-01-31', '2026-03-31')
+  assert.deepEqual(renewalChargeTotals(charges), [{ currency: 'EUR', amount: 24 }, { currency: 'USD', amount: 36 }])
+  const giant = { ...vps, amount: Number.MAX_VALUE, recurrenceInterval: 4, recurrenceUnit: 'year' as const }
+  const giantCharges = upcomingRenewals([giant, { ...giant, id: 'other' }], '2026-01-31', '2026-01-31')
+  assert.throws(() => renewalChargeTotals(giantCharges), /total/i)
 })

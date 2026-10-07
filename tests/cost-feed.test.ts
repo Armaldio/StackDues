@@ -17,6 +17,9 @@ test('feed request failures remain failures, never zero cost data', async () => 
   await assert.rejects(fetchCostFeed('https://example.test/costs', async () => new Response('{')))
   assert.deepEqual(await fetchCostFeed('https://example.test/costs', async () => Response.json(emptyCostFeed())), parseCostFeed(emptyCostFeed()))
 })
+test('invalid successful-sync timestamps are rejected instead of being normalized to another date', () => {
+  assert.throws(() => parseCostFeed({ ...emptyCostFeed(), providers: { aws: { status: 'synced', lastSyncedAt: '2026-02-30T12:00:00Z' }, cloudflare: { status: 'not-configured' } } }))
+})
 test('staleness uses the last successful sync with a 36-hour grace period', () => {
   const now = new Date('2026-10-07T12:00:00Z')
   assert.equal(isProviderStale({ status: 'error', lastSyncedAt: '2026-10-05T00:00:00Z' }, now), true)
