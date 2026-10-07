@@ -15,10 +15,13 @@ Plan
   - Implemented: `src/domain/subscriptions.ts` provides fixed subscription creation/validation, monthly/yearly normalization grouped by currency, and anchored UTC renewal calculations with inclusive date windows.
   - Verified: focused Node tests cover the acceptance examples, arbitrary intervals, month-end/leap-year behavior, input validation, inactive status, currency separation, and date-range boundaries; `npm run build` type-checks application and tests.
   - Scope: this is the domain ledger only. Persistence and manual entry are pending PR 2; accounts/hosting are not implemented. Metered spend remains a separate future model. Day/week equivalents use a 365-day year; no FX conversion is implied.
-- [ ] PR 2 — Dashboard & commitments
+- [x] PR 2 — Dashboard & commitments
   - Build the main dashboard with current normalized monthly cost, annual commitments, upcoming 30/90-day renewals, and fixed-vs-variable split.
   - Add a simple subscriptions CRUD flow; prioritize fast manual entry over logos, vendor catalogs, tags, or advanced organization.
   - Acceptance: from a fresh account, a user can add their real subscriptions and immediately understand “what I pay”, “what is coming”, and “what this costs per year”.
+  - Implemented: responsive Vue dashboard, per-currency fixed monthly/annual equivalents, actual 30/90-day commitments, searchable subscription ledger, add/edit/delete and status controls.
+  - Persistence: validated browser-local storage with read/write failure states and corruption protection; explicit example data is optional and never presented as real spend. This personal Pages workspace needs no account and does not upload manual subscriptions.
+  - Verified: focused storage durability/error tests, production build, and real Chromium CRUD/persistence/status/mobile smoke checks. Infrastructure placeholders are replaced in PR 3.
 - [ ] PR 3 — Variable cost model + AWS
   - Add cost_snapshots / usage_costs separately from subscription definitions; keep actual metered spend immutable and timestamped.
   - Implement AWS Cost Explorer ingestion for month-to-date spend, previous period comparison, forecast if available, and optional service breakdown.
