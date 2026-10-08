@@ -79,7 +79,7 @@ onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
         <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>
-    <details class="provider-setup"><summary>Provider connections</summary><p>This workspace is protected by Cloudflare Access. Provider credentials belong only in Workers Secrets; never enter keys in this dashboard.</p><p>Provider refresh is being migrated to Workers. Reload cost data reads existing observations. See the <a href="https://github.com/Armaldio/StackDues#workers-and-cloudflare-access">private workspace setup guide</a>.</p></details>
+    <details class="provider-setup"><summary>Provider connections</summary><p>This workspace is protected by your email/password login. Provider credentials belong only in Workers Secrets; never enter keys in this dashboard.</p><p>Provider refresh is being migrated to Workers. Reload cost data reads existing observations. See the <a href="https://github.com/Armaldio/StackDues#workers-and-login">private workspace setup guide</a>.</p></details>
   </section>
 </template>
 

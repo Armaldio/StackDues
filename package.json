@@ -10,10 +10,11 @@
     "preview": "wrangler dev --local",
     "refresh:costs": "node scripts/refresh-costs.ts",
     "test:e2e": "playwright test",
-    "typecheck": "nuxt typecheck && tsc -p tsconfig.node.json",
+    "typecheck": "npm run cf:types && nuxt typecheck && tsc -p tsconfig.node.json",
     "deploy": "wrangler deploy",
     "test:worker": "node --test tests/worker-security.integration.ts",
-    "test:aws-worker": "node --test tests/aws-worker.integration.ts"
+    "test:aws-worker": "node --test tests/aws-worker.integration.ts",
+    "cf:types": "wrangler types --env-interface CloudflareEnv"
   },
   "dependencies": {
     "@aws-sdk/client-cost-explorer": "^3.1147.0",

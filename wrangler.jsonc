@@ -19,5 +19,32 @@
       "pattern": "dues.armaldio.xyz",
       "custom_domain": true
     }
-  ]
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "stackdues",
+      "database_id": "7497599e-e134-4485-b364-0280187766f6",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "OWNER_EMAIL": "quentin.goinaud@gmail.com"
+  },
+  "ratelimits": [
+    {
+      "name": "LOGIN_RATE_LIMIT",
+      "namespace_id": "2026100801",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  }
 }

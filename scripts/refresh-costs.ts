@@ -27,7 +27,7 @@ export async function writeCostFeed(path: string, state: CostFeed): Promise<void
 }
 
 /** Invoked only by trusted Actions jobs. Provider secrets never become build-time frontend variables. */
-export async function runRefresh(env: NodeJS.ProcessEnv = process.env, now = new Date()): Promise<CostFeed> {
+export async function runRefresh(env: Partial<NodeJS.ProcessEnv> = process.env, now = new Date()): Promise<CostFeed> {
   // Publishing metered spend on public Pages is an explicit repository-owner decision.
   if (env.PUBLISH_PROVIDER_COSTS !== 'true') return emptyCostFeed()
   const previous = env.PREVIOUS_COST_FEED_URL ? await loadPreviousFeed(env.PREVIOUS_COST_FEED_URL) : emptyCostFeed()

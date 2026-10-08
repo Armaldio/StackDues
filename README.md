@@ -6,13 +6,13 @@ Personal subscription commitments and metered infrastructure costs. [Plane DUES-
 
 Use Node.js 24 and `npm ci`. `npm run dev` starts Nuxt on localhost. The dashboard retains its Vue components and pure domain calculations; client rendering preserves browser-local subscriptions during the migration. Clearing browser storage removes these records, so keep them until the explicit D1 import is available.
 
-- `npm test`: recurrence, renewal, normalization, local storage, cost parsing, provider failure isolation and signed Access verification.
+- `npm test`: recurrence, renewal, normalization, local storage, cost parsing, provider failure isolation and password hashing and signed session verification.
 - `npm run build`: Nuxt/Nitro Workers production build.
 - `npm run typecheck`: application, server adapters, scripts and tests.
 - `npm run test:e2e`: existing CRUD, persistence, currencies, keyboard dialogs, responsive layouts and provider-error scenarios against local Nuxt. CI uses preinstalled Chrome; locally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` if needed.
 - `npm run test:aws-worker`: mocked AWS signing/response spike in real workerd, without provider API requests.
 - `npm run test:worker`: real workerd checks that unauthenticated app, assets, API and legacy-feed requests are denied.
-- `npm run preview`: run the production entry locally, denied by default without valid Access configuration and assertion.
+- `npm run preview`: run the production entry locally, denied by default without a valid owner session.
 
 ## Financial behavior
 
@@ -20,17 +20,19 @@ Fixed subscriptions and metered observations remain separate domain models. Arbi
 
 Actual provider observations are immutable and timestamped. Whole-month forecasts already include actual costs and are never added to actuals. Missing forecasts prevent misleading combined estimates; failed providers retain their previous observations. The dashboard reads `/api/costs`, with no public billing JSON. During the first migration slice this endpoint returns unconfigured providers; D1 and Workers ingestion follow in their own PRs.
 
-## Workers and Cloudflare Access
+## Workers and login
 
-The production entry is **`worker/index.ts`**, wrapping Nitro with a signed Access gate before static asset routing. Always deploy with `npm run deploy`, which uses the repository Wrangler configuration. Do not deploy `.output/server/index.mjs` directly: that generated entry omits the outer gate.
+The production entry is **`worker/index.ts`**, wrapping Nitro with an email/password session gate before static asset routing. Always deploy with `npm run deploy`, which uses the repository Wrangler configuration. Do not deploy `.output/server/index.mjs` directly: that generated entry omits the outer gate.
 
-Deployment target: `dues.armaldio.xyz` in account `37dcf91b09d88c94354b136b5a366235`. Wrangler authentication must have Workers deployment and route permissions. Configure a Zero Trust Self-hosted Access application for this hostname **and every path**, permitting only the owner. Store `ACCESS_TEAM_DOMAIN` (full `https://<team>.cloudflareaccess.com` origin), `ACCESS_AUDIENCE` (application AUD tag), and `OWNER_EMAIL` as Worker bindings through `wrangler secret put`. They are not exposed in Nuxt public runtime configuration.
+Deployment target: `https://dues.armaldio.xyz` in account `37dcf91b09d88c94354b136b5a366235`. No Cloudflare Access or Zero Trust setup is required. The configured owner opens `/register`, enters their email, chooses a password of 16–1024 characters, and supplies the one-time setup code. The code is saved locally in `/root/workspace/stackdues-setup-code.txt` with owner-only file permissions, not published in this repository. Account setup is available only while the singleton owner row is absent; concurrent/repeated registration cannot overwrite it. The user sets the password, which is never logged or stored in plaintext.
 
-The gate verifies RS256 signatures against the team's bounded cached JWKS, issuer, exact audience, expiry and owner email. Missing configuration, forged identity headers, invalid tokens and key-fetch failures deny access. All responses are private/no-store. `run_worker_first: true` prevents asset bypass. `workers_dev: false` and `preview_urls: false` disable alternate public hosts; any future preview hostname must have its own Access application/audience before enabling it. Production has no authentication bypass. Local Nuxt development is for loopback use only.
+D1 stores only the owner's salted PBKDF2-SHA256 hash (100,000 iterations, the Workers Web Crypto ceiling). A random 32-byte `SESSION_SECRET` and random `SETUP_TOKEN` live only in Workers Secrets. `OWNER_EMAIL` is the server's allowlist. Sessions are signed with HS256, expire after eight hours and use a host-only Secure/HttpOnly/SameSite=Strict cookie. Rotating the password hash or session key invalidates earlier sessions. Sign-out clears the browser cookie; a previously copied token remains valid until expiry/rotation. All authenticated responses are private/no-store. Mutation requests require an exact same-origin Origin; login and registration forms have bounded bodies and a Workers rate-limit binding permits ten attempts per minute per IP/location. Missing database/configuration or cryptographic failures deny access.
 
-Build with `npm run build`, configure Access and bindings, then `npm run deploy`. Verify an unauthenticated request returns the Access login redirect (or the Worker's 403) for `/`, `/favicon.svg` and `/api/costs`. Authenticate as the owner and confirm the dashboard; another identity must be denied. Roll back by deploying the previous reviewed commit with the same gate and bindings.
+`run_worker_first: true` prevents asset bypass. `workers_dev: false` and `preview_urls: false` disable alternate public hosts; any future preview must retain the session gate and separate test database/secrets. The only anonymous pages are `/login` and `/register`; app JavaScript, billing APIs and assets require authentication. Local Nuxt development is for loopback use only.
 
-GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed. The legacy Pages deployment and its scheduled workflow have also been disabled in repository settings to remove the alternate public host. No provider credentials belong in GitHub ingestion jobs or client JavaScript. V2 provider credentials will live only in Workers Secrets.
+Create the D1 binding, apply `npx wrangler d1 migrations apply stackdues --remote`, configure Worker Secrets through protected stdin/file input, build with `npm run build`, then `npm run deploy`. CI creates only a temporary local D1 database with fake credentials for runtime tests. It never creates an owner account in production or reads billing secrets.
+
+GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed, and the legacy Pages deployment and scheduled workflow are disabled to remove the alternate public host. Provider credentials belong only in Workers Secrets. Roll back by deploying the previous reviewed commit with the same gate and bindings; D1 data does not roll back with Worker code.
 
 ## Provider adapters
 
