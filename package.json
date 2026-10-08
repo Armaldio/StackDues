@@ -1,27 +1,39 @@
 {
-  "name": "unnamed",
+  "name": "stackdues",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.ts",
-    "dev": "vite",
-    "build": "vue-tsc -b && vite build",
-    "preview": "vite preview",
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "wrangler dev --local",
     "refresh:costs": "node scripts/refresh-costs.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "typecheck": "npm run cf:types && nuxt typecheck && tsc -p tsconfig.node.json",
+    "deploy": "wrangler deploy",
+    "test:worker": "node --test tests/worker-security.integration.ts",
+    "test:aws-worker": "node --test tests/aws-worker.integration.ts",
+    "cf:types": "wrangler types --env-interface CloudflareEnv"
   },
   "dependencies": {
     "@aws-sdk/client-cost-explorer": "^3.1147.0",
+    "@smithy/fetch-http-handler": "^5.8.0",
+    "jose": "^6.2.12",
     "vue": "^3.5.42"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.13.3",
-    "@vitejs/plugin-vue": "^6.0.8",
-    "@vue/tsconfig": "^0.9.1",
+    "nuxt": "^4.6.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
-    "vue-tsc": "^3.3.11"
+    "vue-tsc": "^3.3.11",
+    "wrangler": "^4.148.0"
+  },
+  "overrides": {
+    "simple-git": "^4.0.2",
+    "@simple-git/argv-parser": "^2.0.1",
+    "sharp": "^0.35.5"
   }
 }

@@ -72,7 +72,7 @@ function loadExamples() {
       <div class="sidebar-note"><span class="local-indicator" aria-hidden="true"></span><strong>Your browser, your ledger</strong><p>Fixed subscriptions stay on this device. No account required.</p></div>
     </aside>
     <main id="overview" tabindex="-1">
-      <header class="page-header"><div><p class="eyebrow">Your costs, in one place</p><h1>Overview<span class="heading-period">.</span></h1><p class="muted">Know what you pay. See what’s coming.</p></div><button class="primary-button" :disabled="blocked" @click="openForm()"><span aria-hidden="true">＋</span> Add subscription</button></header>
+      <header class="page-header"><div><p class="eyebrow">Your costs, in one place</p><h1>Overview<span class="heading-period">.</span></h1><p class="muted">Know what you pay. See what’s coming.</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><button class="primary-button" :disabled="blocked" @click="openForm()"><span aria-hidden="true">＋</span> Add subscription</button></header>
       <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }}</div>
       <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
       <section class="summary" aria-label="Fixed subscription summary">

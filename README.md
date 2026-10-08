@@ -1,64 +1,47 @@
-# Subscription & infrastructure costs
+# StackDues
 
-Implementation follows [plan.md](plan.md), one reviewable slice at a time.
+Personal subscription commitments and metered infrastructure costs. [Plane DUES-1](https://app.plane.so/armaldio/projects/8bbba4d1-340a-4a63-9782-ffd2cdecce73/issues/05145959-8843-4c2a-955b-820fa1b18ed9) is the implementation and status source of truth. The completed V1 record remains in Git history; no local V2 plan is maintained.
 
 ## Development
 
-Use Node.js 22.18 or newer and install dependencies with `npm install`.
+Use Node.js 24 and `npm ci`. `npm run dev` starts Nuxt on localhost. The dashboard retains its Vue components and pure domain calculations; client rendering preserves browser-local subscriptions during the migration. Clearing browser storage removes these records, so keep them until the explicit D1 import is available.
 
-- `npm test` runs the fixed subscription domain tests using Node's native TypeScript support.
-- `npm run build` type-checks the application and builds it.
-- `npm run dev` starts the subscription dashboard.
+- `npm test`: recurrence, renewal, normalization, local storage, cost parsing, provider failure isolation and password hashing and signed session verification.
+- `npm run build`: Nuxt/Nitro Workers production build.
+- `npm run typecheck`: application, server adapters, scripts and tests.
+- `npm run test:e2e`: existing CRUD, persistence, currencies, keyboard dialogs, responsive layouts and provider-error scenarios against local Nuxt. CI uses preinstalled Chrome; locally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` if needed.
+- `npm run test:aws-worker`: mocked AWS signing/response spike in real workerd, without provider API requests.
+- `npm run test:worker`: real workerd checks that unauthenticated app, assets, API and legacy-feed requests are denied.
+- `npm run preview`: run the production entry locally, denied by default without a valid owner session.
 
-## Core ledger (PR 1)
+## Financial behavior
 
-`src/domain/subscriptions.ts` defines validated fixed subscriptions and pure cost/renewal calculations. The original billing amount is preserved. Monthly and yearly equivalents use 12 months or 365 days per year (a week is seven days); these are comparison values, not invoices or forecasts. Totals stay grouped by currency without implicit conversion. Paused and cancelled subscriptions do not contribute to active totals or upcoming renewals.
+Fixed subscriptions and metered observations remain separate domain models. Arbitrary day/week/month/year recurrences retain the original charge; normalized equivalents use 365 days or 12 months per year. Calendar renewals are UTC, anchored to their original day and clamped at month ends without drift. Paused/cancelled entries are excluded. Totals are grouped by currency, with no implied exchange conversion.
 
-Renewal dates are calendar dates in `YYYY-MM-DD` form, calculated in UTC. Month/year recurrence stays anchored to the original renewal date, clamping to the final day of shorter months without accumulating drift. Renewal windows include both boundary dates. `nextRenewalAt` is the schedule anchor; calculations do not mutate it.
+Actual provider observations are immutable and timestamped. Whole-month forecasts already include actual costs and are never added to actuals. Missing forecasts prevent misleading combined estimates; failed providers retain their previous observations. The dashboard reads `/api/costs`, with no public billing JSON. During the first migration slice this endpoint returns unconfigured providers; D1 and Workers ingestion follow in their own PRs.
 
-## Dashboard (PR 2)
+## Workers and login
 
-Add, edit, pause/resume, or delete fixed subscriptions from the dashboard. Charges can recur every positive number of days, weeks, months, or years. The dashboard shows normalized rates alongside the actual renewals due in the next 30 and 90 days, grouped by currency.
+The production entry is **`worker/index.ts`**, wrapping Nitro with an email/password session gate before static asset routing. Always deploy with `npm run deploy`, which uses the repository Wrangler configuration. Do not deploy `.output/server/index.mjs` directly: that generated entry omits the outer gate.
 
-Manual subscriptions persist in this browser's local storage. No account is required, and these records are never uploaded. Clearing browser data removes them; saved-data errors block overwriting corrupted records. Optional example subscriptions are clearly labelled.
+Deployment target: `https://dues.armaldio.xyz` in account `37dcf91b09d88c94354b136b5a366235`. No Cloudflare Access or Zero Trust setup is required. The configured owner opens `/register`, enters their email, chooses a password of 16–1024 characters, and supplies the one-time setup code. The code is saved locally in `/root/workspace/stackdues-setup-code.txt` with owner-only file permissions, not published in this repository. Account setup is available only while the singleton owner row is absent; concurrent/repeated registration cannot overwrite it. The user sets the password, which is never logged or stored in plaintext.
 
-## Metered usage and AWS (PR 3)
+D1 stores only the owner's salted PBKDF2-SHA256 hash (100,000 iterations, the Workers Web Crypto ceiling). A random 32-byte `SESSION_SECRET` and random `SETUP_TOKEN` live only in Workers Secrets. `OWNER_EMAIL` is the server's allowlist. Sessions are signed with HS256, expire after eight hours and use a host-only Secure/HttpOnly/SameSite=Strict cookie. Rotating the password hash or session key invalidates earlier sessions. Sign-out clears the browser cookie; a previously copied token remains valid until expiry/rotation. All authenticated responses are private/no-store. Mutation requests require an exact same-origin Origin; login and registration forms have bounded bodies and a Workers rate-limit binding permits ten attempts per minute per IP/location. Missing database/configuration or cryptographic failures deny access.
 
-`CostSnapshot` observations are immutable, timestamped actuals or forecasts, separate from fixed subscriptions. The dashboard reads the published `data/costs.json` feed. Actuals are never added to forecasts because whole-month forecasts already include actual costs. Currency totals remain separate; missing forecasts prevent a misleading combined estimate.
+`run_worker_first: true` prevents asset bypass. `workers_dev: false` and `preview_urls: false` disable alternate public hosts; any future preview must retain the session gate and separate test database/secrets. The only anonymous pages are `/login` and `/register`; app JavaScript, billing APIs and assets require authentication. Local Nuxt development is for loopback use only.
 
-The AWS adapter runs only on the server/in GitHub Actions using the official Cost Explorer SDK. It collects month-to-date UnblendedCost through the previous UTC day, comparable previous-month days, full previous-month spend, service breakdowns, and available forecasts. Pagination, unavailable history/forecasts, malformed responses and sanitized errors have focused tests. [AWS Cost Explorer API reference](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsage.html) describes the source data.
+Create the D1 binding, apply `npx wrangler d1 migrations apply stackdues --remote`, configure Worker Secrets through protected stdin/file input, build with `npm run build`, then `npm run deploy`. CI creates only a temporary local D1 database with fake credentials for runtime tests. It never creates an owner account in production or reads billing secrets.
 
-Provider setup and scheduled public feed deployment are added in PR 5. Credentials are never entered into the dashboard or bundled into frontend JavaScript.
+GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed, and the legacy Pages deployment and scheduled workflow are disabled to remove the alternate public host. Provider credentials belong only in Workers Secrets. Roll back by deploying the previous reviewed commit with the same gate and bindings; D1 data does not roll back with Worker code.
 
-## Cloudflare and independent refresh (PR 4)
+## Provider adapters
 
-The server adapter uses [Cloudflare PayGo Billable Usage v1](https://developers.cloudflare.com/api/resources/billing/subresources/usage/methods/paygo/), summing `ContractedCost` charge rows with returned Workers/R2/service breakdowns. Running cumulative costs and consumption quantities are never mistaken for prices. Billing currency, credits and billing-period groups are preserved.
+AWS uses Cost Explorer's `us-east-1` endpoint, MTD UnblendedCost through the previous UTC day, matched prior-month comparison, service breakdowns and available forecasts. The Workers compatibility spike proves request signing and response handling with explicit secret bindings and `FetchHttpHandler`; the Node default credential chain does not work in Workers. Required billing permissions are `ce:GetCostAndUsage` and `ce:GetCostForecast`.
 
-The API reports charge intervals rather than a full billing-cycle end, so the dashboard labels these as billing-period-to-date actuals without inventing a forecast. Empty responses remain unavailable. A tiny shared refresh contract is introduced now that both adapters exist. Each provider refreshes independently; failed collections cannot replace successful history or another provider's costs.
+Cloudflare's existing adapter reads priced PayGo charge rows; it does not sum cumulative values or unpriced quantities and does not invent unavailable forecasts. The Workers sync slice will verify the currently supported endpoint before enabling ingestion.
 
-## Provider setup
+The retained `scripts/refresh-costs.ts` is a V1 offline helper covered by historical regression tests, not a deployment or CI ingestion step. It must not be used to publish private billing data.
 
-This personal app is hosted at **https://armaldio.github.io/billing/**. GitHub Pages serves the dashboard; trusted GitHub Actions jobs call billing APIs. Manual subscriptions stay in your browser. Provider observations published to this public site are public, including their cost history. No provider credentials are published.
+## Dependency audit
 
-1. In the repository's **Settings → Secrets and variables → Actions**, add the provider secrets below. Never create `VITE_` secrets or enter keys in the dashboard.
-2. For AWS, enable Cost Explorer and grant the credential identity only the billing read permissions it needs: `ce:GetCostAndUsage` and `ce:GetCostForecast`. Add `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN` for temporary credentials. Temporary credentials expire and must be renewed; a dedicated read-only identity is appropriate for unattended use. The adapter uses Cost Explorer's `us-east-1` endpoint.
-3. For Cloudflare, create an account-scoped token with **Billing Read** permission, then add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. The PayGo API is for supported self-serve accounts; unavailable API access appears as a failed sync, not zero spend.
-4. When you want to publish metered costs publicly, add the repository **variable** `PUBLISH_PROVIDER_COSTS` with value `true`. Publication defaults off even when secrets are present. Turning it off publishes an empty provider feed on the next deployment; already downloaded public data cannot be recalled.
-5. Run **Actions → Refresh costs and deploy Pages → Run workflow**. Reload cost data in the dashboard after the deployment finishes. The button reads published observations; provider ingestion happens in Actions, not in the browser.
-
-The workflow refreshes and deploys on main changes, manual dispatch, and every six hours at minute 17 UTC. GitHub schedules can be delayed, and GitHub can disable scheduled jobs in inactive repositories. Last-successful sync dates, failure messages and a 36-hour stale warning make missing refreshes visible. The browser reloads the feed every 15 minutes while open.
-
-Each deployment recovers the prior published feed before appending new captures. Provider failures preserve prior observations and the other provider's success. A network/validation failure recovering history stops publication rather than erasing history. Records are immutable; the dashboard shows the 30 most recent observations while the published feed retains full history.
-
-No provider credentials were configured during initial deployment, so live account ingestion has not been authenticated against your accounts. Adapters and independent failure paths are covered with realistic API fixtures; the initial site accurately shows Not connected.
-
-## Verification and deployment
-
-- `npm test`: focused recurrence, renewal, normalization, storage, adapter, failure-isolation and history-publication tests.
-- `npm run build`: application, server script and test type checking plus the production Pages build.
-- `npm run test:e2e`: Chromium CRUD/persistence, currency separation, keyboard dialog, responsive layout, provider failure/staleness/history checks against the built app. Run `npx playwright install chromium` once, or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing Chromium binary.
-- `npm run refresh:costs`: trusted server-side refresh using environment variables. Publication is opt-in; the command never asks the browser for secrets.
-
-GitHub Actions CI runs tests, type checking/build, browser checks with the Ubuntu 24.04 runner’s preinstalled stable Chrome, and a dependency audit. Local tests use installed Chromium unless an executable path is supplied. The Pages workflow builds and validates before using provider secrets in its dedicated ingestion step. It publishes only `dist`, never source files or secret environment variables. Roll back by reverting a change on main and letting the same deployment workflow rebuild it; prior provider history is recovered from the published feed.
-
-The Pages base path is `/billing/`, including the cost feed and favicon. Development opens at `http://localhost:5173/billing/`. There is no cloud account system or cross-device subscription synchronization in this personal V1 workspace.
+`npm audit --omit=dev --audit-level=high` gates deployed application dependencies. Full audits currently report unpatched build/development-only `braces` (deep glob pattern exhaustion) and `node-forge` (RSA verification in local development certificate tooling); neither is included in the Workers or browser bundle. Nuxt dev runs only on loopback. Patched `simple-git` and `sharp` are pinned via overrides; builds and browser tests validate compatibility. Revisit these overrides and unpatched tooling advisories when upstream fixes ship. Do not force an audit downgrade of Nuxt or Wrangler.

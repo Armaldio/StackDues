@@ -1,0 +1,8 @@
+{
+  "name": "stackdues-aws-test-fixture",
+  "main": "./aws-worker.ts",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false
+}

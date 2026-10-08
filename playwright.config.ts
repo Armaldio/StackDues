@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
 const external = process.env.PLAYWRIGHT_BASE_URL
-const baseURL = external ?? 'http://127.0.0.1:4183/billing/'
+const baseURL = external ?? 'http://127.0.0.1:4183/'
 export default defineConfig({
   testDir: './e2e',
   forbidOnly: Boolean(process.env.CI),
@@ -15,7 +15,7 @@ export default defineConfig({
     screenshot: 'only-on-failure', trace: 'retain-on-failure',
   },
   webServer: external ? undefined : {
-    command: 'npm run preview -- --host 127.0.0.1 --port 4183 --strictPort',
+    command: 'npm run dev -- --host 127.0.0.1 --port 4183',
     url: baseURL, reuseExistingServer: false,
   },
 })
