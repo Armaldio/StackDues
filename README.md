@@ -30,7 +30,7 @@ The gate verifies RS256 signatures against the team's bounded cached JWKS, issue
 
 Build with `npm run build`, configure Access and bindings, then `npm run deploy`. Verify an unauthenticated request returns the Access login redirect (or the Worker's 403) for `/`, `/favicon.svg` and `/api/costs`. Authenticate as the owner and confirm the dashboard; another identity must be denied. Roll back by deploying the previous reviewed commit with the same gate and bindings.
 
-GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed. An existing Pages deployment is not automatically unpublished by removing its workflow; disable Pages in repository settings when replacing it. No provider credentials belong in GitHub ingestion jobs or client JavaScript. V2 provider credentials will live only in Workers Secrets.
+GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed. The legacy Pages deployment and its scheduled workflow have also been disabled in repository settings to remove the alternate public host. No provider credentials belong in GitHub ingestion jobs or client JavaScript. V2 provider credentials will live only in Workers Secrets.
 
 ## Provider adapters
 
