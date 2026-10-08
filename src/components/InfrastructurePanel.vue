@@ -34,7 +34,7 @@ function breakdown(value: unknown): readonly CostBreakdown[] { return Array.isAr
 async function reload() {
   if (loading.value) return
   loading.value = true
-  try { feed.value = await fetchCostFeed(`${import.meta.env.BASE_URL}data/costs.json`); error.value = ''; emit('loaded', feed.value) }
+  try { feed.value = await fetchCostFeed('/api/costs'); error.value = ''; emit('loaded', feed.value) }
   catch { error.value = 'Infrastructure data could not be loaded. Previous observations are still displayed. Try again.' }
   finally { loading.value = false }
 }

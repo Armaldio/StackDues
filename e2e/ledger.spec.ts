@@ -56,7 +56,7 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
   const snapshot = { id: 'aws-actual', provider: 'aws', periodStart, periodEnd, amount: 10, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current', breakdown: [{ service: 'EC2', amount: 10, currency: 'USD' }] } }
   const feed = { snapshots: [snapshot, { ...snapshot, id: 'aws-forecast', kind: 'forecast', amount: 30, metadata: { period: 'current' } }, { ...snapshot, id: 'cf-actual', provider: 'cloudflare', amount: 3, capturedAt, metadata: { period: 'current', projectionUnavailable: true, breakdown: [{ service: 'R2 Storage', amount: 3, currency: 'USD' }] } }], providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'error', lastSyncedAt: capturedAt, error: 'raw-provider-secret' } } }
   let fail = false
-  await page.route('**/data/costs.json', route => route.fulfill(fail ? { status: 503, body: 'offline' } : { json: feed }))
+  await page.route('**/api/costs', route => route.fulfill(fail ? { status: 503, body: 'offline' } : { json: feed }))
   await page.goto('./')
   const infrastructure = page.locator('#infrastructure')
   await expect(infrastructure.getByText('EC2', { exact: true })).toBeVisible()
