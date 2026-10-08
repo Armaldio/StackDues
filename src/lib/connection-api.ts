@@ -60,7 +60,15 @@ export async function refreshProviders(provider?: CostProvider): Promise<void> {
   const current = refreshing.get(key)
   if (current) return current
   const url = provider ? `/api/costs/refresh?provider=${provider}` : '/api/costs/refresh'
-  const operation = request(url, 'POST').then(() => undefined).finally(() => refreshing.delete(key))
+  const operation = request(url, 'POST').then(async response => {
+    if (!provider) return
+    const feed = await json(response)
+    const providers = feed && typeof feed === 'object' && !Array.isArray(feed) ? (feed as Record<string, unknown>).providers : undefined
+    const status = providers && typeof providers === 'object' && !Array.isArray(providers) ? (providers as Record<string, unknown>)[provider] : undefined
+    if (!status || typeof status !== 'object' || Array.isArray(status) || (status as Record<string, unknown>).status !== 'synced') {
+      throw new ConnectionApiError('The provider refresh did not complete. Previous data is retained; retry the sync.')
+    }
+  }).finally(() => refreshing.delete(key))
   refreshing.set(key, operation)
   return operation
 }

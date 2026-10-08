@@ -4,15 +4,16 @@ import nitro from '../.output/server/index.mjs'
 import { authGate, type AuthBindings } from './auth-gate.ts'
 import { syncCosts } from '../server/worker-sync.ts'
 import { refreshHostingerEntries } from '../server/data/hostinger.ts'
+import { runScheduledSyncs } from './scheduled-sync.ts'
 
 type WorkerBindings = AuthBindings & { CREDENTIALS_KEY?: string }
 
 export default {
   scheduled(controller: ScheduledController, env: WorkerBindings, context: ExecutionContext): void {
-    context.waitUntil(Promise.allSettled([
-      syncCosts(env, new Date(controller.scheduledTime)),
-      refreshHostingerEntries(env.DB, env.CREDENTIALS_KEY, new Date(controller.scheduledTime)),
-    ]))
+    context.waitUntil(runScheduledSyncs(
+      () => syncCosts(env, new Date(controller.scheduledTime)),
+      () => refreshHostingerEntries(env.DB, env.CREDENTIALS_KEY, new Date(controller.scheduledTime)),
+    ))
   },
   async fetch(request: Request, env: WorkerBindings, context: ExecutionContext): Promise<Response> {
     const authResponse = await authGate(request, env)
