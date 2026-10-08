@@ -11,7 +11,7 @@ import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost
 import { trackedSpendingTotals, usageTotals } from './domain/usage-costs'
 import type { ConnectionStatuses } from './lib/connection-api'
 import type { HostingerDiscovery as HostingerState } from './lib/hostinger-api'
-import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
+import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
 const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
@@ -35,6 +35,7 @@ async function reloadLedger() {
 function syncCurrentSection() { currentSection.value = window.location.hash.slice(1) || 'overview' }
 onMounted(() => { void reloadLedger(); window.addEventListener('hashchange', syncCurrentSection) })
 const notice = ref('')
+const exportError = ref('')
 const today = ref(new Date().toISOString().slice(0, 10))
 const timer = window.setInterval(() => { today.value = new Date().toISOString().slice(0, 10) }, 60_000)
 onUnmounted(() => { window.clearInterval(timer); window.removeEventListener('hashchange', syncCurrentSection) })
@@ -123,6 +124,20 @@ async function importLedger(items: Subscription[]): Promise<ImportResult> {
   } catch (cause) { mutationError(cause); throw cause }
   finally { busy.value = false }
 }
+function downloadSubscriptions() {
+  if (blocked.value) return
+  try {
+    const json = serializeSubscriptionExport(subscriptions.value)
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
+    try {
+      const link = document.createElement('a')
+      link.href = url; link.download = SUBSCRIPTION_EXPORT_FILENAME; link.click()
+      exportError.value = ''; notice.value = 'Subscriptions downloaded. Keep this file private.'
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 1_000) }
+  } catch {
+    exportError.value = 'Subscriptions could not be downloaded. Your account was not changed. Try again.'
+  }
+}
 async function reloadFinancialViews() {
   await Promise.allSettled([reloadLedger(), infrastructure.value?.reload(), hostinger.value?.reload()])
 }
@@ -198,7 +213,8 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
         </section>
 
       </div>
-      <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div v-if="subscriptions.length" class="table-tools"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></div></div>
+      <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>
+        <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
         <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No manual subscriptions yet</h3><p>Connect a provider above to sync your costs, or add services such as Bitwarden Premium and ChatGPT Plus yourself.</p></div>
         <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>

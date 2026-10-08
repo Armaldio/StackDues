@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, parseStoredSubscriptions } from '../src/lib/subscription-api.ts'
+import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, parseStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME } from '../src/lib/subscription-api.ts'
 const item = { id: 'legacy', name: 'Bitwarden', billingType: 'fixed' as const, amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year' as const, nextRenewalAt: '2026-10-08', status: 'active' as const }
 
 test('server ledger rejects corrupted revisions, duplicate ids and invalid financial records', () => {
@@ -33,4 +33,27 @@ test('delete sends a quoted revision header without a request body', async t => 
     return Response.json({ deleted: true })
   })
   await deleteStoredSubscription(item.id, 2)
+})
+
+test('subscription export matches the importer schema and omits server-only properties', async t => {
+  const stored = { ...item, provider: 'Hostinger', revision: 7, encryptedCredentials: 'private-provider-secret', sessionToken: 'private-session-token', password: 'private-password', cookie: 'private-cookie', apiKey: 'private-api-key', errorTrace: 'private-error-trace' }
+  const json = serializeSubscriptionExport([stored])
+  assert.equal(SUBSCRIPTION_EXPORT_FILENAME, 'stackdues-subscriptions.json')
+  assert.deepEqual(JSON.parse(json), [{ ...item, provider: 'Hostinger' }])
+  assert.doesNotMatch(json, /revision|encryptedCredentials|private-provider-secret|sessionToken|private-session-token|password|private-password|cookie|private-cookie|apiKey|private-api-key|errorTrace|private-error-trace/)
+
+  t.mock.method(globalThis, 'fetch', async (_url: string | URL | Request, options?: RequestInit) => {
+    assert.equal(options?.method, 'POST')
+    const body = JSON.parse(String(options?.body)) as { subscriptions: unknown[] }
+    assert.deepEqual(body.subscriptions, JSON.parse(json))
+    return Response.json({ subscriptions: [{ ...item, provider: 'Hostinger', revision: 1 }], createdIds: ['legacy'] })
+  })
+  const imported = await importStoredSubscriptions(JSON.parse(json))
+  assert.deepEqual(imported.createdIds, ['legacy'])
+})
+
+test('subscription export rejects data outside existing importer limits', () => {
+  const records = Array.from({ length: 1_001 }, (_, index) => ({ ...item, id: `item-${index}`, revision: 1 }))
+  assert.throws(() => serializeSubscriptionExport(records), /1,000-subscription import limit/)
+  assert.throws(() => serializeSubscriptionExport([{ ...item, name: 'x'.repeat(1_048_600), revision: 1 }]), /1 MB import limit/)
 })

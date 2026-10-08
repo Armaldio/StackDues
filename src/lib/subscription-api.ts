@@ -2,6 +2,18 @@ import { createSubscription, normalizedTotals, type Subscription } from '../doma
 
 export type StoredSubscription = Subscription & { revision: number }
 export type ImportResult = { subscriptions: StoredSubscription[]; createdIds: string[] }
+export const SUBSCRIPTION_EXPORT_FILENAME = 'stackdues-subscriptions.json'
+
+/** Serialize only importer-compatible subscription fields; never include server revisions or other record properties. */
+export function serializeSubscriptionExport(records: readonly StoredSubscription[]): string {
+  if (records.length > 1_000) throw new Error('This export exceeds the 1,000-subscription import limit.')
+  const subscriptions = records.map(record => createSubscription(record))
+  if (new Set(subscriptions.map(({ id }) => id)).size !== subscriptions.length) throw new Error('This export contains duplicate subscription IDs.')
+  normalizedTotals(subscriptions)
+  const json = JSON.stringify(subscriptions, null, 2)
+  if (new TextEncoder().encode(json).length > 1_048_576) throw new Error('This export exceeds the 1 MB import limit.')
+  return json
+}
 
 export function parseStoredSubscriptions(value: unknown): StoredSubscription[] {
   if (!Array.isArray(value)) throw new Error('The server returned invalid subscription data. Reload before making changes.')
