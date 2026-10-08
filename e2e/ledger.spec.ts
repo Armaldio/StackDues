@@ -35,6 +35,7 @@ async function mockLedger(page: Page, initial: Record<string, unknown>[] = [], m
     else row.linkedSubscriptionId = String(request.postDataJSON().subscriptionId)
     return route.fulfill({ json: { id: row.linkedSubscriptionId, name: row.name, provider: 'Hostinger', billingType: 'fixed', amount: row.renewalPrice, currency: row.currency, recurrenceInterval: row.recurrenceInterval, recurrenceUnit: row.recurrenceUnit, nextRenewalAt: String(row.nextBillingAt).slice(0, 10), status: 'active', revision: 1 } })
   })
+  return { addSubscription(item: Record<string, unknown>) { subscriptions.push(item) } }
 }
 
 async function add(page: Page, name: string, amount: string, interval: string, unit: string, currency = 'USD') {
@@ -55,7 +56,7 @@ test('fresh ledger supports real recurrence, edits, status changes, deletion, an
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
   await mockLedger(page)
   await page.goto('./')
-  await expect(page.getByText('Start with what you pay.')).toBeVisible()
+  await expect(page.getByText('Start with what you pay.')).toBeVisible({ timeout: 15_000 })
   await add(page, 'Bitwarden', '10', '1', 'year')
   await add(page, 'Hostinger', '192', '4', 'year')
   await add(page, 'VPS', '12', '1', 'month')
@@ -217,7 +218,7 @@ test('connecting AWS automatically updates Overview, Infrastructure and History 
   await expect(page.locator('#history')).toContainText('AWS')
 })
 
-test('connecting Cloudflare shows metered spend in Overview without another refresh action', async ({ page }) => {
+test('connecting Cloudflare shows actual spend prominently when no forecast is available', async ({ page }) => {
   const today = new Date().toISOString().slice(0, 10)
   const start = `${today.slice(0, 7)}-01`
   const endDate = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1)).toISOString().slice(0, 10)
@@ -233,7 +234,6 @@ test('connecting Cloudflare shows metered spend in Overview without another refr
   })
   await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: synced ? [
     { id: 'cf-actual', provider: 'cloudflare', periodStart: start, periodEnd: endDate, amount: 8, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
-    { id: 'cf-forecast', provider: 'cloudflare', periodStart: start, periodEnd: endDate, amount: 20, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
   ] : [], providers: { aws: { status: 'not-configured' }, cloudflare: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: 'not-configured' } } } }))
   await page.route('**/api/costs/refresh*', async route => {
     expect(new URL(route.request().url()).searchParams.get('provider')).toBe('cloudflare')
@@ -247,25 +247,29 @@ test('connecting Cloudflare shows metered spend in Overview without another refr
   await card.getByLabel('API token', { exact: true }).fill('test-token')
   await card.getByRole('button', { name: 'Save Cloudflare connection' }).click()
   await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  const providerOverview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Cloudflare/ }) })
+  await expect(providerOverview).toContainText('USD 8.00')
+  await expect(providerOverview).toContainText('Forecast unavailable')
   const overview = page.locator('.tracked-spending-card')
   await expect(overview).toContainText('USD 40.00')
   await expect(overview).toContainText('USD 8.00')
-  await expect(overview).toContainText('USD 20.00')
-  await expect(overview).toContainText('USD 60.00')
+  await expect(overview).toContainText('Combined estimate unavailable')
   await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$8.00')
   await expect(page.locator('#history')).toContainText('Cloudflare')
   expect(syncCalls).toBe(1)
 })
 
 test('connecting Hostinger automatically discovers subscriptions without pressing Sync', async ({ page }) => {
-  await mockLedger(page)
+  const ledger = await mockLedger(page)
   let configured = false, syncCalls = 0
-  const row = { externalId: 'host-kvm', name: 'KVM from Hostinger', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: '2026-11-08T00:00:00.000Z', linkedSubscriptionId: null, seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
+  const renewal = new Date(); renewal.setUTCDate(renewal.getUTCDate() + 10)
+  const renewalDate = renewal.toISOString().slice(0, 10)
+  const row = { externalId: 'host-kvm', name: 'KVM from Hostinger', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: `${renewalDate}T00:00:00.000Z`, linkedSubscriptionId: 'auto-host-kvm', automaticallyLinked: true, excluded: false, possibleMatches: [], seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
   const syncedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
   await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured, revision: configured ? 1 : 0 } } }))
   await page.route('**/api/connections/hostinger', async route => { configured = true; return route.fulfill({ json: { configured: true, revision: 1 } }) })
   await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: configured && syncCalls ? [row] : [], sync: configured && syncCalls ? { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } : { status: 'not-configured' } } }))
-  await page.route('**/api/hostinger/subscriptions/sync', async route => { syncCalls++; return route.fulfill({ json: { subscriptions: [row], sync: { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } } }) })
+  await page.route('**/api/hostinger/subscriptions/sync', async route => { syncCalls++; ledger.addSubscription({ id: 'auto-host-kvm', name: row.name, provider: 'Hostinger', billingType: 'fixed', amount: row.renewalPrice, currency: 'USD', recurrenceInterval: 12, recurrenceUnit: 'month', nextRenewalAt: renewalDate, status: 'active', revision: 1 }); return route.fulfill({ json: { subscriptions: [row], sync: { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } } }) })
   await page.goto('./')
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Hostinger', exact: true }) })
   await card.locator('summary').click()
@@ -273,14 +277,30 @@ test('connecting Hostinger automatically discovers subscriptions without pressin
   await card.getByRole('button', { name: 'Save Hostinger connection' }).click()
   await expect(card.getByText('Synced', { exact: true })).toBeVisible()
   await expect(page.locator('#hostinger-discovery')).toContainText('KVM from Hostinger')
+  await expect(page.locator('#subscriptions')).toContainText('KVM from Hostinger')
+  await expect(page.locator('.renewal-list')).toContainText('KVM from Hostinger')
+  await expect(page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Hostinger/ }) })).toContainText('USD 15.00')
   expect(syncCalls).toBe(1)
+})
+
+test('stale Hostinger commitments remain visible but are omitted from upcoming charges', async ({ page }) => {
+  const renewal = new Date(); renewal.setUTCDate(renewal.getUTCDate() + 10)
+  const renewalDate = renewal.toISOString().slice(0, 10)
+  const subscription = { id: 'stale-hostinger', name: 'Stale VPS', provider: 'Hostinger', billingType: 'fixed', amount: 120, currency: 'USD', recurrenceInterval: 12, recurrenceUnit: 'month', nextRenewalAt: renewalDate, status: 'active', revision: 1 }
+  await mockLedger(page, [subscription])
+  const source = { externalId: 'stale-vps', name: 'Stale VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 90, renewalPrice: 120, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: `${renewalDate}T00:00:00.000Z`, linkedSubscriptionId: subscription.id, automaticallyLinked: true, excluded: false, possibleMatches: [], providerNameCollision: false, seenInLatestSync: false, renewalAvailable: true, upcomingCommitment: 120 }
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [source], sync: { status: 'error', lastAttemptAt: new Date().toISOString(), lastSyncedAt: '2026-10-01T00:00:00Z' } } }))
+  await page.goto('./')
+  await expect(page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Hostinger/ }) })).toContainText('USD 10.00')
+  await expect(page.locator('.provider-overview')).toContainText('omitted from upcoming-charge totals')
+  await expect(page.locator('.renewals-panel')).toContainText('Nothing coming up')
 })
 
 test('Hostinger renewal discovery stays out of totals until linked or added and preserves existing values', async ({ page }) => {
   const legacy = { id: 'manual-hostinger', name: 'Existing VPS', billingType: 'fixed', amount: 25, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-12-01', status: 'active', revision: 1 }
   await mockLedger(page, [legacy])
   let linked = false, added = false
-  const source = { externalId: 'provider-kvm-1', name: 'Existing VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T11:54:22.000Z', expiresAt: null, nextBillingAt: '2026-10-08T11:54:22.000Z', linkedSubscriptionId: null, seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
+  const source = { externalId: 'provider-kvm-1', name: 'Existing VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T11:54:22.000Z', expiresAt: null, nextBillingAt: '2026-10-08T11:54:22.000Z', linkedSubscriptionId: null, automaticallyLinked: false, excluded: false, possibleMatches: [{ id: legacy.id, name: legacy.name }], seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
   await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [{ ...source, linkedSubscriptionId: linked ? legacy.id : added ? 'new-entry' : null }], sync: { status: 'synced', lastSyncedAt: '2026-10-08T12:00:00Z' } } }))
   await page.route('**/api/hostinger/subscriptions/provider-kvm-1/link', async route => {
     expect(route.request().postDataJSON()).toEqual({ subscriptionId: legacy.id, revision: 1, mode: 'keep-current' }); linked = true

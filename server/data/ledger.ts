@@ -81,11 +81,14 @@ export async function patchStoredSubscription(db: D1Database, id: string, input:
     throw new LedgerError(exists ? 409 : 404, exists ? 'This subscription changed on another device. Reload before editing it.' : 'Subscription was not found.')
   })
 }
-export async function deleteStoredSubscription(db: D1Database, id: string, expectedRevision: unknown): Promise<{ deleted: true }> {
+export async function deleteStoredSubscription(db: D1Database, id: string, expectedRevision: unknown, beforeDelete?: (id: string, expectedRevision: number) => Promise<D1PreparedStatement | null>): Promise<{ deleted: true }> {
   const expected = revision(expectedRevision)
   return storage(async () => {
-    const result = await db.prepare('DELETE FROM manual_subscriptions WHERE id = ? AND revision = ?').bind(id, expected).run()
-    if (result.meta.changes === 1) return { deleted: true }
+    const exclusion = await beforeDelete?.(id, expected)
+    const statements = [...(exclusion ? [exclusion] : []), db.prepare('DELETE FROM manual_subscriptions WHERE id = ? AND revision = ? RETURNING id').bind(id, expected)]
+    const results = await db.batch(statements)
+    const deleted = results[statements.length - 1]
+    if (deleted?.results.length === 1) return { deleted: true }
     const exists = await db.prepare('SELECT id FROM manual_subscriptions WHERE id = ?').bind(id).first()
     throw new LedgerError(exists ? 409 : 404, exists ? 'This subscription changed on another device. Reload before deleting it.' : 'Subscription was not found.')
   })

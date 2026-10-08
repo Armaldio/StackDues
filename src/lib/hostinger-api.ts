@@ -4,6 +4,8 @@ export type HostingerDiscoveryRow = {
   externalId: string; name: string; status: string; recurrenceInterval: number | null; recurrenceUnit: string | null
   currency: string; totalPrice: number | null; renewalPrice: number | null; isAutoRenewed: boolean; createdAt: string
   expiresAt: string | null; nextBillingAt: string | null; linkedSubscriptionId: string | null; seenInLatestSync: boolean
+  automaticallyLinked: boolean; excluded: boolean; possibleMatches: { id: string; name: string }[]
+  providerNameCollision: boolean
   renewalAvailable: boolean; upcomingCommitment: number | null
 }
 export type HostingerDiscovery = { subscriptions: HostingerDiscoveryRow[]; sync: { status: string; lastAttemptAt?: string; lastSyncedAt?: string } }
@@ -37,4 +39,7 @@ export async function syncHostinger(): Promise<HostingerDiscovery> {
 export async function addHostingerSubscription(externalId: string): Promise<StoredSubscription> { return await request(`/api/hostinger/subscriptions/${encodeURIComponent(externalId)}/entry`, 'POST', {}) as StoredSubscription }
 export async function linkHostingerSubscription(externalId: string, subscription: StoredSubscription, mode: 'keep-current' | 'use-provider'): Promise<StoredSubscription> {
   return await request(`/api/hostinger/subscriptions/${encodeURIComponent(externalId)}/link`, 'POST', { subscriptionId: subscription.id, revision: subscription.revision, mode }) as StoredSubscription
+}
+export async function setHostingerSubscriptionExcluded(externalId: string, excluded: boolean): Promise<void> {
+  await request(`/api/hostinger/subscriptions/${encodeURIComponent(externalId)}/exclusion`, 'POST', { excluded })
 }

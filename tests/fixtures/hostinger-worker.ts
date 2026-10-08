@@ -1,8 +1,10 @@
 import ledgerMigration from '../../migrations/0002_ledger.sql'
 import credentialMigration from '../../migrations/0003_provider_credentials.sql'
 import hostingerMigration from '../../migrations/0004_hostinger_discovery.sql'
-import { createStoredSubscription, listSubscriptions, patchStoredSubscription } from '../../server/data/ledger.ts'
-import { createHostingerLedgerEntry, hostingerEditStatement, linkHostingerToLedger, readHostingerDiscovery, refreshHostingerEntries } from '../../server/data/hostinger.ts'
+import autoCommitmentMigration from '../../migrations/0005_hostinger_auto_commitments.sql'
+import { createStoredSubscription, deleteStoredSubscription, listSubscriptions, patchStoredSubscription } from '../../server/data/ledger.ts'
+import { createHostingerLedgerEntry, hostingerDeleteExclusionStatement, hostingerEditStatement, linkHostingerToLedger, readHostingerDiscovery, refreshHostingerEntries } from '../../server/data/hostinger.ts'
+import { setHostingerExclusion } from '../../server/data/hostinger.ts'
 import { saveProviderCredentials } from '../../server/security/provider-credentials.ts'
 import { LedgerError } from '../../server/data/ledger.ts'
 
@@ -12,7 +14,7 @@ export default {
     const input = await request.json() as Record<string, any>
     try {
       if (input.action === 'initialize') {
-        for (const migration of [ledgerMigration, credentialMigration, hostingerMigration]) await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' '))
+        for (const migration of [ledgerMigration, credentialMigration, hostingerMigration, autoCommitmentMigration]) await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' '))
         return Response.json({ ready: true })
       }
       if (input.action === 'save') return Response.json(await saveProviderCredentials(env.DB, 'hostinger', { apiToken: 'TEST_FAKE_HOSTINGER_TOKEN' }, 0, key))
@@ -28,6 +30,8 @@ export default {
       if (input.action === 'list') return Response.json(await readHostingerDiscovery(env.DB))
       if (input.action === 'add') return Response.json(await createHostingerLedgerEntry(env.DB, input.externalId))
       if (input.action === 'link') return Response.json(await linkHostingerToLedger(env.DB, input.externalId, input.subscriptionId, input.revision, input.mode))
+      if (input.action === 'exclude') return Response.json(await setHostingerExclusion(env.DB, input.externalId, input.excluded))
+      if (input.action === 'delete') return Response.json(await deleteStoredSubscription(env.DB, input.id, input.revision, (id, revision) => hostingerDeleteExclusionStatement(env.DB, id, revision)))
       if (input.action === 'edit') {
         return Response.json(await patchStoredSubscription(env.DB, input.id, input.subscription, input.revision, (item, revision) => hostingerEditStatement(env.DB, item, revision)))
       }
