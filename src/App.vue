@@ -6,12 +6,16 @@ import ConnectionsPanel from './components/ConnectionsPanel.vue'
 import HostingerDiscovery from './components/HostingerDiscovery.vue'
 import CostHistory from './components/CostHistory.vue'
 import LegacyImport from './components/LegacyImport.vue'
-import { emptyCostFeed } from './lib/cost-feed'
 import { createSubscription, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
+import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost-feed'
+import { trackedSpendingTotals, usageTotals } from './domain/usage-costs'
+import type { ConnectionStatuses } from './lib/connection-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
 const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
+const hostinger = ref<InstanceType<typeof HostingerDiscovery>>()
+const connectionStatuses = ref<ConnectionStatuses>()
 const subscriptions = ref<StoredSubscription[]>([])
 const storageError = ref<string | null>(null)
 const loading = ref(true)
@@ -37,6 +41,17 @@ const search = ref('')
 const statusFilter = ref('all')
 const activeCount = computed(() => subscriptions.value.filter((item) => item.status === 'active').length)
 const totals = computed(() => normalizedTotals(subscriptions.value))
+const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
+const connectedMeteredProviders = computed(() => (['aws', 'cloudflare'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
+const meteredTotals = computed(() => usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value))
+const trackedTotals = computed(() => trackedSpendingTotals(totals.value, meteredTotals.value, connectedMeteredProviders.value, meterSnapshots.value))
+const configuredMeteredProviders = computed(() => (['aws', 'cloudflare'] as const).filter(provider => connectionStatuses.value?.[provider].configured))
+const meteredWarning = computed(() => {
+  const failed = connectedMeteredProviders.value.filter(provider => costFeed.value.providers[provider].status === 'error')
+  if (failed.length) return `${failed.map(provider => provider === 'aws' ? 'AWS' : 'Cloudflare').join(' and ')} sync failed. Last successful observations are shown where available.`
+  const stale = connectedMeteredProviders.value.filter(provider => isProviderStale(costFeed.value.providers[provider]))
+  return stale.length ? `${stale.map(provider => provider === 'aws' ? 'AWS' : 'Cloudflare').join(' and ')} data is stale. Last known values remain visible.` : ''
+})
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
 const renewals = computed(() => upcomingRenewals(subscriptions.value, today.value, endDate(windowDays.value)))
 function chargeTotals(charges: Renewal[]): { currency: string; amount: number | null }[] {
@@ -101,6 +116,10 @@ async function loadExamples() {
   try { await importLedger(examples); notice.value = 'Example subscriptions loaded. Edit or delete them before adding your real costs.' }
   catch { /* The request error is shown above the ledger. */ }
 }
+async function reloadFinancialViews() {
+  await Promise.allSettled([reloadLedger(), infrastructure.value?.reload(), hostinger.value?.reload()])
+}
+function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuses.value = statuses }
 
 </script>
 
@@ -123,6 +142,19 @@ async function loadExamples() {
         <div class="monthly-summary"><div class="metric-label"><span>Fixed monthly equivalent</span><span class="small-label">{{ activeCount }} active</span></div><template v-if="totals.length"><div v-for="total in totals" :key="total.currency" class="monthly-value">{{ money(total.monthly, total.currency) }}<span>/ mo</span></div></template><p v-else class="monthly-value">—<span>/ mo</span></p><p class="metric-note">Your active charges spread over their billing cycles.</p></div>
         <div class="secondary-metrics"><div class="metric"><p class="metric-label">Annual equivalent</p><p v-for="total in totals" :key="total.currency" class="metric-value">{{ money(total.yearly, total.currency) }}</p><p v-if="!totals.length" class="metric-value">—</p><p class="metric-note">Normalized rate, not this year’s bill.</p><p v-for="total in due365" :key="total.currency" class="metric-note">{{ money(total.amount, total.currency) }} due in 365 days.</p></div><div class="metric"><p class="metric-label">Due in 30 days</p><p v-for="total in due30" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due30.length" class="metric-value">—</p><p class="metric-note">Actual upcoming charges.</p></div><div class="metric"><p class="metric-label">Due in 90 days</p><p v-for="total in due90" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due90.length" class="metric-value">—</p><p class="metric-note">Includes the next 30 days.</p></div></div>
       </section>
+      <section v-if="loaded" class="tracked-spending" aria-labelledby="tracked-spending-title">
+        <div class="section-header"><div><p class="eyebrow">Fixed commitments + metered usage</p><h2 id="tracked-spending-title">Tracked monthly spend</h2></div></div>
+        <p class="metric-note">Metered actuals are month to date. Full-month forecasts already include actuals, so only the forecast is combined with fixed commitments.</p>
+        <p v-if="meteredWarning" class="feed-warning" role="status">{{ meteredWarning }}</p>
+        <div v-if="trackedTotals.length" class="tracked-spending-grid">
+          <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card">
+            <h3>{{ total.currency }}</h3>
+            <dl><div><dt>Fixed monthly equivalent</dt><dd>{{ money(total.fixedMonthly, total.currency) }}</dd></div><div><dt>Metered actual, month to date</dt><dd>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</dd></div><div><dt>Metered full-month forecast</dt><dd>{{ total.meteredForecast === null ? 'Unavailable' : money(total.meteredForecast, total.currency) }}</dd></div></dl>
+            <p class="combined-total">{{ total.combinedMonthlyEstimate === null ? connectedMeteredProviders.length ? 'Combined estimate unavailable' : 'Fixed commitments only' : `Combined estimated monthly spend · ${money(total.combinedMonthlyEstimate, total.currency)}` }}</p>
+          </article>
+        </div>
+        <p v-else class="quiet-empty">Add a fixed subscription or connect a metered provider to see tracked spending.</p>
+      </section>
       <p v-if="loaded" class="summary-footnote">Currencies are kept separate. Renewal windows include today · {{ dateLabel(today) }} UTC.</p>
       <div v-if="loaded" class="content-columns single-column">
         <section class="renewals-panel" aria-labelledby="renewals-title"><div class="section-header"><div><p class="eyebrow">On the horizon</p><h2 id="renewals-title">Upcoming renewals</h2></div><div class="segmented-control" aria-label="Renewal window"><button :aria-pressed="windowDays === 30" @click="windowDays = 30">30 days</button><button :aria-pressed="windowDays === 90" @click="windowDays = 90">90 days</button></div></div>
@@ -136,9 +168,9 @@ async function loadExamples() {
         <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in ledger`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
       <LegacyImport :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
-      <ConnectionsPanel @changed="infrastructure?.reload()" />
-      <HostingerDiscovery :ledger="subscriptions" @changed="reloadLedger" />
-      <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :today="today" @loaded="costFeed = $event" />
+      <ConnectionsPanel @loaded="setConnectionStatuses" @changed="reloadFinancialViews" />
+      <HostingerDiscovery ref="hostinger" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" />
+      <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :configured-providers="configuredMeteredProviders" :today="today" @loaded="costFeed = $event" />
       <CostHistory :snapshots="costFeed.snapshots" />
       <footer class="app-footer"><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved privately to your account. Imported browser ledgers remain untouched.</p></footer>
     </main>

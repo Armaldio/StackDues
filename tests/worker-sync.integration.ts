@@ -83,6 +83,12 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       assert.equal(feed.snapshots.filter(item => item.provider === 'cloudflare').length, 4)
       assert.ok(!feed.snapshots.some(item => item.provider === 'cloudflare' && item.capturedAt === '2026-10-08T19:00:00.000Z'))
     })
+    await t.test('a provider-specific refresh contacts only the newly connected provider', async () => {
+      const { feed, calls } = await call({ action: 'manual', mode: 'success', providers: ['cloudflare'], now: '2026-10-08T20:00:00Z' })
+      assert.deepEqual(calls, { aws: 0, cloudflare: 1 })
+      assert.equal(feed.providers.cloudflare.lastSyncedAt, '2026-10-08T20:00:00.000Z')
+      assert.equal(feed.providers.aws.lastSyncedAt, '2026-10-08T19:00:00.000Z')
+    })
   } finally {
     workerProcess.kill('SIGTERM')
     if (workerProcess.exitCode === null) await once(workerProcess, 'exit')

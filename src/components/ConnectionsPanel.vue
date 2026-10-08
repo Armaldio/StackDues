@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ConnectionApiError, deleteConnection, fetchConnections, saveConnection, type ConnectionProvider, type ConnectionStatuses, type ProviderCredentials } from '../lib/connection-api'
-const emit = defineEmits<{ changed: [] }>()
+import { ConnectionApiError, deleteConnection, fetchConnections, refreshProviders, saveConnection, type ConnectionProvider, type ConnectionStatuses, type ProviderCredentials } from '../lib/connection-api'
+import { syncHostinger } from '../lib/hostinger-api'
+const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'hostinger']
 const names = { aws: 'Amazon Web Services', cloudflare: 'Cloudflare', hostinger: 'Hostinger' }
 const statuses = ref<ConnectionStatuses>()
@@ -10,6 +11,8 @@ const busy = ref<ConnectionProvider>()
 const error = ref('')
 const expired = ref(false)
 const notice = ref('')
+const syncState = reactive<Record<ConnectionProvider, 'idle' | 'syncing' | 'synced' | 'failed'>>({ aws: 'idle', cloudflare: 'idle', hostinger: 'idle' })
+const syncError = reactive<Record<ConnectionProvider, string>>({ aws: '', cloudflare: '', hostinger: '' })
 const drafts = reactive<ProviderCredentials>({ aws: { accessKeyId: '', secretAccessKey: '', sessionToken: '' }, cloudflare: { accountId: '', apiToken: '' }, hostinger: { apiToken: '' } })
 function clear(provider: ConnectionProvider) {
   if (provider === 'aws') { drafts.aws.accessKeyId = ''; drafts.aws.secretAccessKey = ''; drafts.aws.sessionToken = '' }
@@ -20,7 +23,7 @@ function fail(cause: unknown) { error.value = cause instanceof Error ? cause.mes
 async function reload() {
   if (loading.value || busy.value) return
   loading.value = true
-  try { statuses.value = await fetchConnections(); error.value = ''; expired.value = false }
+  try { statuses.value = await fetchConnections(); error.value = ''; expired.value = false; emit('loaded', statuses.value) }
   catch (cause) { fail(cause) }
   finally { loading.value = false }
 }
@@ -30,15 +33,44 @@ async function save(provider: ConnectionProvider) {
   try {
     const credentials = provider === 'aws' ? { accessKeyId: drafts.aws.accessKeyId.trim(), secretAccessKey: drafts.aws.secretAccessKey.trim(), ...(drafts.aws.sessionToken?.trim() ? { sessionToken: drafts.aws.sessionToken.trim() } : {}) } : provider === 'cloudflare' ? { accountId: drafts.cloudflare.accountId.trim(), apiToken: drafts.cloudflare.apiToken.trim() } : { apiToken: drafts.hostinger.apiToken.trim() }
     statuses.value[provider] = await saveConnection(provider, credentials, statuses.value[provider].revision)
-    notice.value = `${names[provider]} connection saved. ${provider === 'hostinger' ? 'Sync Hostinger subscriptions below to review renewals.' : 'Use Refresh providers to collect usage costs.'}`
+    const synced = await runSync(provider)
+    notice.value = synced ? `${names[provider]} connection saved and initial sync completed.` : `${names[provider]} connection saved, but its initial sync failed. Previous data is retained; retry below.`
+    emit('loaded', statuses.value)
     emit('changed')
   } catch (cause) { fail(cause) }
   finally { clear(provider); busy.value = undefined }
 }
+async function runSync(provider: ConnectionProvider): Promise<boolean> {
+  syncState[provider] = 'syncing'; syncError[provider] = ''
+  try {
+    if (provider === 'hostinger') await syncHostinger()
+    else await refreshProviders(provider)
+    syncState[provider] = 'synced'; return true
+  } catch (cause) {
+    syncState[provider] = 'failed'
+    syncError[provider] = cause instanceof Error ? cause.message : 'Initial sync failed. Previous data is retained.'
+    return false
+  }
+}
+async function retrySync(provider: ConnectionProvider) {
+  if (busy.value || syncState[provider] !== 'failed') return
+  busy.value = provider
+  try {
+    const synced = await runSync(provider)
+    notice.value = synced ? `${names[provider]} sync completed.` : ''
+    emit('changed')
+  } finally { busy.value = undefined }
+}
 async function disconnect(provider: ConnectionProvider) {
   if (!statuses.value || loading.value || busy.value || error.value || !window.confirm(`Disconnect ${names[provider]}? Stored credentials will be removed. Previous cost observations will be kept.`)) return
   busy.value = provider; notice.value = ''
-  try { statuses.value[provider] = await deleteConnection(provider, statuses.value[provider].revision); notice.value = `${names[provider]} disconnected. Previous cost observations are retained.`; emit('changed') }
+  try {
+    statuses.value[provider] = await deleteConnection(provider, statuses.value[provider].revision)
+    await runSync(provider)
+    syncState[provider] = 'idle'; syncError[provider] = ''
+    notice.value = `${names[provider]} disconnected. Previous cost observations are retained.`
+    emit('loaded', statuses.value); emit('changed')
+  }
   catch (cause) { fail(cause) }
   finally { clear(provider); busy.value = undefined }
 }
@@ -53,7 +85,7 @@ onUnmounted(() => providers.forEach(clear))
     <p v-if="error" class="error-message" role="alert">{{ error }} <a v-if="expired" href="/login">Sign in</a></p><p v-if="notice" class="connection-notice" role="status">{{ notice }}</p>
     <div class="connection-grid">
       <article v-for="provider in providers" :key="provider" class="connection-card">
-        <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ statuses ? statuses[provider].configured ? 'Credentials saved' : 'Not configured' : loading ? 'Loading…' : 'Unavailable' }}</span></header>
+        <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ busy === provider && syncState[provider] === 'idle' ? 'Connecting…' : syncState[provider] === 'syncing' ? 'Syncing…' : syncState[provider] === 'failed' ? 'Sync failed' : syncState[provider] === 'synced' ? 'Synced' : statuses ? statuses[provider].configured ? 'Credentials saved' : 'Not configured' : loading ? 'Loading…' : 'Unavailable' }}</span></header>
         <p v-if="provider === 'aws'">Use an AWS key with read-only Cost Explorer access.</p><p v-else-if="provider === 'cloudflare'">Use a Cloudflare token with account billing read access.</p><p v-else>Hostinger API tokens inherit your account permissions; StackDues only reads the subscription list. Review discovered renewals below the ledger.</p>
         <details class="connection-editor"><summary>{{ statuses?.[provider].configured ? 'Replace credentials' : 'Connect account' }}</summary>
           <form autocomplete="off" @submit.prevent="save(provider)"><fieldset :disabled="loading || !!busy || !statuses || !!error">
@@ -64,6 +96,8 @@ onUnmounted(() => providers.forEach(clear))
           </fieldset></form>
         </details>
         <button v-if="statuses?.[provider].configured" class="text-button delete-button" type="button" :disabled="loading || !!busy || !!error" @click="disconnect(provider)">Disconnect {{ names[provider] }}</button>
+        <p v-if="syncState[provider] === 'failed'" class="error-message" role="status">{{ syncError[provider] }}</p>
+        <button v-if="syncState[provider] === 'failed'" class="secondary-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Retrying…' : `Retry ${names[provider]} sync` }}</button>
         <p v-if="statuses?.[provider].updatedAt" class="metric-note">Updated {{ new Date(statuses[provider].updatedAt!).toLocaleString() }}</p>
       </article>
     </div>

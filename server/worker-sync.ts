@@ -15,8 +15,9 @@ export type CostSyncDependencies = {
 }
 
 /** Manual refresh and scheduled execution use the same collection and persistence path. */
-export async function syncCosts(env: CostSyncBindings, now = new Date(), dependencies: CostSyncDependencies = {}): Promise<CostFeed> {
+export async function syncCosts(env: CostSyncBindings, now = new Date(), dependencies: CostSyncDependencies = {}, selectedProviders: readonly CostProvider[] = ['aws', 'cloudflare']): Promise<CostFeed> {
   if (!env.DB || !Number.isFinite(now.getTime())) throw new LedgerError(503, 'Cost refresh is unavailable. Try again later.')
+  if (!selectedProviders.length || selectedProviders.some(provider => !['aws', 'cloudflare'].includes(provider)) || new Set(selectedProviders).size !== selectedProviders.length) throw new LedgerError(400, 'Choose one or more supported providers to refresh.')
   const load = dependencies.loadCredentials ?? loadProviderCredentials
   async function connector(provider: CostProvider): Promise<CostConnector> {
     try {
@@ -36,7 +37,7 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
       return { provider, configured: true, collect: async () => { throw new Error('Provider credentials are unavailable.') } }
     }
   }
-  const results = await Promise.allSettled((['aws', 'cloudflare'] as const).map(async provider => {
+  const results = await Promise.allSettled(selectedProviders.map(async provider => {
     const collected = await refreshCosts(emptyCostSyncState(), [await connector(provider)], now)
     // Commit only this provider's complete collection and status. The SQL preserves
     // last successful timestamps and rejects older overlapping status attempts.

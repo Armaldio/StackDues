@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { latestCostSnapshots, usageTotals, type CostBreakdown, type CostProvider } from '../domain/usage-costs'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { latestCostSnapshots, trackedSpendingTotals, usageTotals, type CostBreakdown, type CostProvider } from '../domain/usage-costs'
 import type { CurrencyTotal } from '../domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, parseCostFeed, isProviderStale, type CostFeed } from '../lib/cost-feed'
 
 import { ConnectionApiError, refreshProviders } from '../lib/connection-api'
 
-const props = defineProps<{ fixedTotals: CurrencyTotal[]; today: string }>()
+const props = defineProps<{ fixedTotals: CurrencyTotal[]; configuredProviders: CostProvider[]; today: string }>()
 const emit = defineEmits<{ loaded: [feed: CostFeed] }>()
 const feed = ref(emptyCostFeed())
 const loading = ref(false)
@@ -15,10 +15,13 @@ const refreshing = ref(false)
 const refreshError = ref('')
 const expired = ref(false)
 const providers: CostProvider[] = ['aws', 'cloudflare']
+let feedLoaded = false
+let staleRefreshStarted = false
 const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
-const totals = computed(() => usageTotals(activeSnapshots.value, props.today))
+const totals = computed(() => usageTotals(activeSnapshots.value, props.today, connectedProviders.value))
 const latest = computed(() => latestCostSnapshots(activeSnapshots.value).filter(row => row.kind === 'actual' && row.metadata?.period === 'current'))
-const combined = computed(() => totals.value.map(total => ({ ...total, fixed: props.fixedTotals.find(row => row.currency === total.currency)?.monthly ?? 0, fixedYearly: props.fixedTotals.find(row => row.currency === total.currency)?.yearly ?? 0 })))
+const connectedProviders = computed(() => providers.filter(provider => feed.value.providers[provider].status !== 'not-configured'))
+const combined = computed(() => trackedSpendingTotals(props.fixedTotals, totals.value, connectedProviders.value, activeSnapshots.value))
 function money(amount: number, currency: string) { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount) }
 function date(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
 function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : 'Cloudflare' }
@@ -44,37 +47,53 @@ async function reload() {
     if (response.status === 401) throw new ConnectionApiError('Your session expired. Sign in again, then reload.', 401)
     if (!response.ok) throw new Error('Cost data unavailable')
     feed.value = parseCostFeed(await response.json()); error.value = ''; expired.value = false; emit('loaded', feed.value)
+    feedLoaded = true
   }
   catch (cause) { expired.value = cause instanceof ConnectionApiError && cause.status === 401; error.value = expired.value ? 'Your session expired. Sign in again, then reload.' : 'Infrastructure data could not be loaded. Previous observations are still displayed. Try again.' }
   finally { loading.value = false }
 }
-async function refresh() {
+async function refresh(provider?: CostProvider) {
   if (refreshing.value || loading.value) return
   refreshing.value = true; refreshError.value = ''
-  try { await refreshProviders(); await reload() }
+  try { await refreshProviders(provider); await reload() }
   catch (cause) { refreshError.value = cause instanceof Error ? cause.message : 'Provider refresh failed. Previous observations are retained.'; expired.value = cause instanceof ConnectionApiError && cause.status === 401 }
   finally { refreshing.value = false }
 }
+async function refreshStaleProviders() {
+  if (!feedLoaded || staleRefreshStarted) return
+  const now = Date.now()
+  const stale = props.configuredProviders.filter(provider => {
+    const status = feed.value.providers[provider]
+    const lastAttempt = status.lastAttemptAt ? Date.parse(status.lastAttemptAt) : 0
+    const hasNoSuccessfulSync = !status.lastSyncedAt
+    return (hasNoSuccessfulSync || isProviderStale(status)) && now - lastAttempt >= 6 * 60 * 60 * 1000
+  })
+  if (!stale.length) return
+  staleRefreshStarted = true
+  await refresh(stale.length === providers.length ? undefined : stale[0])
+}
 defineExpose({ reload })
 let timer: ReturnType<typeof setInterval> | undefined
-onMounted(() => { void reload(); timer = setInterval(() => { if (!refreshing.value) void reload() }, 15 * 60 * 1000) })
+onMounted(async () => { await reload(); void refreshStaleProviders(); timer = setInterval(() => { if (!refreshing.value) void reload() }, 15 * 60 * 1000) })
 onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
+watch(() => props.configuredProviders.join(','), () => { void refreshStaleProviders() })
 </script>
 
 <template>
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
-    <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><div class="provider-refresh-actions"><button type="button" class="secondary-button" :disabled="loading || refreshing" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button><button type="button" class="primary-button" :disabled="loading || refreshing" @click="refresh">{{ refreshing ? 'Refreshing…' : 'Refresh providers' }}</button></div></div>
+    <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><div class="provider-refresh-actions"><button type="button" class="secondary-button" :disabled="loading || refreshing" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button><button type="button" class="primary-button" :disabled="loading || refreshing" @click="refresh()">{{ refreshing ? 'Refreshing…' : 'Refresh providers' }}</button></div></div>
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
     <p class="metric-note refresh-description">Refresh providers fetches new usage from connected AWS and Cloudflare accounts. Reload cost data reads the stored observations.</p>
     <p v-if="error" role="alert" class="feed-warning">{{ error }}</p><p v-if="refreshError" role="alert" class="feed-warning">{{ refreshError }}</p><p v-if="expired"><a href="/login">Sign in</a></p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
-        <p class="eyebrow">{{ total.currency }} · current reported period</p><strong>{{ total.hasActual ? money(total.actual, total.currency) : 'Unavailable' }}</strong><span>Actual metered spend</span>
-        <p v-if="total.hasForecast">{{ money(total.estimatedMonthly, total.currency) }} forecast / month · {{ money(total.estimatedYearly, total.currency) }} annualized estimate</p>
+        <p class="eyebrow">{{ total.currency }} · current reported period</p><strong>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</strong><span>Actual metered spend</span>
+        <p v-if="total.meteredForecast !== null">{{ money(total.meteredForecast, total.currency) }} forecast / month</p>
         <p v-else>Monthly forecast unavailable</p>
-        <p v-if="total.hasForecast && total.estimationComplete" class="combined-total">{{ money(total.fixed + total.estimatedMonthly, total.currency) }} tracked estimated monthly total, including fixed commitments</p>
-        <p v-if="total.hasForecast && total.estimationComplete" class="combined-total">{{ Number.isFinite(total.fixedYearly + total.estimatedYearly) ? money(total.fixedYearly + total.estimatedYearly, total.currency) : 'Annual total unavailable' }} tracked annualized estimate</p>
-        <p v-if="total.hasForecast && !total.estimationComplete" class="feed-warning">Forecast covers only some providers. A combined total is unavailable.</p>
+        <p v-if="total.combinedMonthlyEstimate !== null" class="combined-total">{{ money(total.combinedMonthlyEstimate, total.currency) }} tracked estimated monthly total, including fixed commitments</p>
+        <p v-else-if="connectedProviders.length" class="feed-warning">Combined estimate unavailable until every connected provider reports a complete forecast in this currency.</p>
+        <p v-else class="metric-note">Fixed commitments only; no metered providers are connected.</p>
+        <p v-if="total.meteredYearlyForecast !== null" class="combined-total">{{ Number.isFinite(total.fixedYearly + total.meteredYearlyForecast) ? money(total.fixedYearly + total.meteredYearlyForecast, total.currency) : 'Annual total unavailable' }} tracked annualized estimate</p>
       </div>
     </div>
     <div class="provider-grid">
