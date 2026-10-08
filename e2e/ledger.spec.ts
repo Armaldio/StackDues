@@ -217,6 +217,46 @@ test('connecting AWS automatically updates Overview, Infrastructure and History 
   await expect(page.locator('#history')).toContainText('AWS')
 })
 
+test('connecting Cloudflare shows metered spend in Overview without another refresh action', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const start = `${today.slice(0, 7)}-01`
+  const endDate = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1)).toISOString().slice(0, 10)
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const fixed = { id: 'fixed-monthly', name: 'Fixed VPS', billingType: 'fixed', amount: 40, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: today, status: 'active', revision: 1 }
+  await mockLedger(page, [fixed])
+  let configured = false, synced = false, syncCalls = 0
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured, revision: configured ? 1 : 0 }, hostinger: { configured: false, revision: 0 } } }))
+  await page.route('**/api/connections/cloudflare', async route => {
+    expect(route.request().postDataJSON()).toEqual({ credentials: { accountId: 'test-account', apiToken: 'test-token' }, revision: 0 })
+    configured = true
+    return route.fulfill({ json: { configured: true, revision: 1 } })
+  })
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: synced ? [
+    { id: 'cf-actual', provider: 'cloudflare', periodStart: start, periodEnd: endDate, amount: 8, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+    { id: 'cf-forecast', provider: 'cloudflare', periodStart: start, periodEnd: endDate, amount: 20, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
+  ] : [], providers: { aws: { status: 'not-configured' }, cloudflare: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: 'not-configured' } } } }))
+  await page.route('**/api/costs/refresh*', async route => {
+    expect(new URL(route.request().url()).searchParams.get('provider')).toBe('cloudflare')
+    syncCalls++; synced = true
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('./')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Cloudflare', exact: true }) })
+  await card.locator('summary').click()
+  await card.getByLabel('Account ID', { exact: true }).fill('test-account')
+  await card.getByLabel('API token', { exact: true }).fill('test-token')
+  await card.getByRole('button', { name: 'Save Cloudflare connection' }).click()
+  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  const overview = page.locator('.tracked-spending-card')
+  await expect(overview).toContainText('USD 40.00')
+  await expect(overview).toContainText('USD 8.00')
+  await expect(overview).toContainText('USD 20.00')
+  await expect(overview).toContainText('USD 60.00')
+  await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$8.00')
+  await expect(page.locator('#history')).toContainText('Cloudflare')
+  expect(syncCalls).toBe(1)
+})
+
 test('connecting Hostinger automatically discovers subscriptions without pressing Sync', async ({ page }) => {
   await mockLedger(page)
   let configured = false, syncCalls = 0
