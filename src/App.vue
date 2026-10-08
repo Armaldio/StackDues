@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import SubscriptionForm from './components/SubscriptionForm.vue'
 import InfrastructurePanel from './components/InfrastructurePanel.vue'
 import ConnectionsPanel from './components/ConnectionsPanel.vue'
+import HostingerDiscovery from './components/HostingerDiscovery.vue'
 import CostHistory from './components/CostHistory.vue'
 import LegacyImport from './components/LegacyImport.vue'
 import { emptyCostFeed } from './lib/cost-feed'
@@ -109,7 +110,7 @@ async function loadExamples() {
     <aside class="sidebar" aria-label="Primary navigation">
       <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">L</span>ledger<span class="brand-period">.</span></a>
       <p class="workspace-label">Personal workspace</p>
-      <nav><a href="#overview" class="nav-active"><span aria-hidden="true">◫</span> Overview</a><a href="#subscriptions"><span aria-hidden="true">≡</span> Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#infrastructure"><span aria-hidden="true">▤</span> Infrastructure</a><a href="#connections"><span aria-hidden="true">⌁</span> Connections</a><a href="#history"><span aria-hidden="true">↻</span> History</a></nav>
+      <nav><a href="#overview" class="nav-active"><span aria-hidden="true">◫</span> Overview</a><a href="#subscriptions"><span aria-hidden="true">≡</span> Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#infrastructure"><span aria-hidden="true">▤</span> Infrastructure</a><a href="#connections"><span aria-hidden="true">⌁</span> Connections</a><a href="#hostinger-discovery"><span aria-hidden="true">↗</span> Hostinger</a><a href="#history"><span aria-hidden="true">↻</span> History</a></nav>
       <div class="sidebar-note"><span class="local-indicator" aria-hidden="true"></span><strong>Your private ledger</strong><p>Fixed subscriptions are saved to your account and available across devices.</p></div>
     </aside>
     <main id="overview" tabindex="-1">
@@ -136,6 +137,7 @@ async function loadExamples() {
       </section>
       <LegacyImport :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
       <ConnectionsPanel @changed="infrastructure?.reload()" />
+      <HostingerDiscovery :ledger="subscriptions" @changed="reloadLedger" />
       <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :today="today" @loaded="costFeed = $event" />
       <CostHistory :snapshots="costFeed.snapshots" />
       <footer class="app-footer"><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved privately to your account. Imported browser ledgers remain untouched.</p></footer>

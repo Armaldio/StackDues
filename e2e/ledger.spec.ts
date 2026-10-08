@@ -24,6 +24,17 @@ async function mockLedger(page: Page, initial: Record<string, unknown>[] = [], m
     subscriptions = subscriptions.map(existing => existing.id === id ? item : existing)
     return route.fulfill({ json: item })
   })
+  let hostingerRows: Record<string, unknown>[] = []
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: hostingerRows, sync: { status: 'not-configured' } } }))
+  await page.route('**/api/hostinger/subscriptions/**', async route => {
+    const request = route.request(), path = new URL(request.url()).pathname
+    if (path.endsWith('/sync')) { hostingerRows = hostingerRows.map(row => ({ ...row, seenInLatestSync: true })); return route.fulfill({ status: 200, json: { subscriptions: hostingerRows, sync: { status: 'synced' } } }) }
+    const externalId = decodeURIComponent(path.split('/').at(-2)!)
+    const row = hostingerRows.find(item => item.externalId === externalId)!
+    if (path.endsWith('/entry')) row.linkedSubscriptionId = `hostinger-${externalId}`
+    else row.linkedSubscriptionId = String(request.postDataJSON().subscriptionId)
+    return route.fulfill({ json: { id: row.linkedSubscriptionId, name: row.name, provider: 'Hostinger', billingType: 'fixed', amount: row.renewalPrice, currency: row.currency, recurrenceInterval: row.recurrenceInterval, recurrenceUnit: row.recurrenceUnit, nextRenewalAt: String(row.nextBillingAt).slice(0, 10), status: 'active', revision: 1 } })
+  })
 }
 
 async function add(page: Page, name: string, amount: string, interval: string, unit: string, currency = 'USD') {
@@ -171,6 +182,32 @@ test('connections keep secrets request-only, preserve revisions, and refresh pro
   await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
   await expect(card.getByText('Credentials saved', { exact: true })).toBeVisible()
   expect(revision).toBe(3)
+  await page.setViewportSize({ width: 320, height: 1000 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('Hostinger renewal discovery stays out of totals until linked or added and preserves existing values', async ({ page }) => {
+  const legacy = { id: 'manual-hostinger', name: 'Existing VPS', billingType: 'fixed', amount: 25, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-12-01', status: 'active', revision: 1 }
+  await mockLedger(page, [legacy])
+  let linked = false, added = false
+  const source = { externalId: 'provider-kvm-1', name: 'Existing VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T11:54:22.000Z', expiresAt: null, nextBillingAt: '2026-10-08T11:54:22.000Z', linkedSubscriptionId: null, seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [{ ...source, linkedSubscriptionId: linked ? legacy.id : added ? 'new-entry' : null }], sync: { status: 'synced', lastSyncedAt: '2026-10-08T12:00:00Z' } } }))
+  await page.route('**/api/hostinger/subscriptions/provider-kvm-1/link', async route => {
+    expect(route.request().postDataJSON()).toEqual({ subscriptionId: legacy.id, revision: 1, mode: 'keep-current' }); linked = true
+    return route.fulfill({ json: { ...legacy, provider: 'Hostinger', revision: 2 } })
+  })
+  await page.route('**/api/hostinger/subscriptions/provider-kvm-1/entry', async route => { added = true; return route.fulfill({ json: { ...legacy, id: 'new-entry', name: source.name, amount: source.renewalPrice, revision: 1 } }) })
+  await page.goto('./')
+  const panel = page.locator('#hostinger-discovery')
+  await expect(panel.getByText('USD 179.99', { exact: true })).toBeVisible()
+  await panel.getByText('Link an existing entry').click()
+  await panel.getByLabel('Ledger entry').selectOption(legacy.id)
+  await panel.getByRole('button', { name: 'Link without a duplicate' }).click()
+  await expect(panel.getByText('Linked to ledger', { exact: true })).toBeVisible()
+  await expect(panel.getByText(/Connected to Existing VPS/)).toBeVisible()
+  await expect(page.locator('#subscriptions')).toContainText('USD 25.00')
+  expect(linked).toBe(true)
+  expect(added).toBe(false)
   await page.setViewportSize({ width: 320, height: 1000 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })

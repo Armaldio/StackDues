@@ -44,7 +44,7 @@ GitHub Actions validates code only and never refreshes billing. The previous Pag
 
 ## Connections and refresh
 
-Use Connections to save or replace AWS, Cloudflare and Hostinger credentials. Secret inputs are cleared after submission and are never prefilled from the server or placed in browser storage. The server returns only configured/revision/update status. Replacement and disconnect use revisions to reject stale changes; disconnect keeps financial history. Hostinger discovery is delivered in its own slice.
+Use Connections to save or replace AWS, Cloudflare and Hostinger credentials. Secret inputs are cleared after submission and are never prefilled from the server or placed in browser storage. The server returns only configured/revision/update status. Replacement and disconnect use revisions to reject stale changes; disconnect keeps financial history. Hostinger API tokens inherit the account owner's permissions; StackDues only calls the subscriptions list endpoint.
 
 `CREDENTIALS_KEY` is a separate random 32-byte key encoded as 64 hex characters in Workers Secrets. Provider-specific JSON is encrypted with AES-GCM, a new 12-byte IV for every write, and provider/version-bound additional authenticated data. D1 stores ciphertext, IV and revision; missing/wrong keys or tampering fail closed. Do not rotate this key without re-encrypting saved credentials or reconnecting every provider. Backups must retain both D1 data and secure key access. Never reuse the session key or password as the encryption key.
 

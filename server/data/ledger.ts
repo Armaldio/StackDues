@@ -65,13 +65,17 @@ export async function createStoredSubscription(db: D1Database, input: unknown): 
     return fromRow(row)
   })
 }
-export async function patchStoredSubscription(db: D1Database, id: string, input: unknown, expectedRevision: unknown): Promise<StoredSubscription> {
+export async function patchStoredSubscription(db: D1Database, id: string, input: unknown, expectedRevision: unknown, afterUpdate?: (item: Subscription, revision: number) => Promise<D1PreparedStatement | null>): Promise<StoredSubscription> {
   const item = validateSubscription(input)
   const expected = revision(expectedRevision)
   if (item.id !== id) throw new LedgerError(400, 'Subscription ID cannot be changed.')
   return storage(async () => {
-    const row = await db.prepare(`UPDATE manual_subscriptions SET name = ?, provider = ?, amount = ?, currency = ?, recurrence_interval = ?, recurrence_unit = ?, next_renewal_at = ?, status = ?, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING *`)
-      .bind(...parameters(item).slice(1), id, expected).first<SubscriptionRow>()
+    const update = db.prepare(`UPDATE manual_subscriptions SET name = ?, provider = ?, amount = ?, currency = ?, recurrence_interval = ?, recurrence_unit = ?, next_renewal_at = ?, status = ?, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING *`)
+      .bind(...parameters(item).slice(1), id, expected)
+    const override = await afterUpdate?.(item, expected)
+    const row = override
+      ? (await db.batch<SubscriptionRow>([update, override]))[0]!.results[0]
+      : await update.first<SubscriptionRow>()
     if (row) return fromRow(row)
     const exists = await db.prepare('SELECT id FROM manual_subscriptions WHERE id = ?').bind(id).first()
     throw new LedgerError(exists ? 409 : 404, exists ? 'This subscription changed on another device. Reload before editing it.' : 'Subscription was not found.')
