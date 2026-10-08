@@ -66,6 +66,18 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .metric:first-child { border-left: 0; }
 .metric-value { font: 500 1.2rem/1.5 var(--mono); margin-top: .75rem; overflow-wrap: anywhere; }
 .summary-footnote { color: var(--muted); font-size: .7rem; margin: .75rem 0 2.5rem; }
+.provider-overview { margin: 1.25rem 0 2rem; }
+.provider-overview .section-header { margin-bottom: .75rem; }
+.provider-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: .75rem; }
+.provider-overview-card { min-width: 0; padding: 1rem 1.1rem; border: 1px solid var(--line); background: var(--surface); }
+.provider-overview-card h3 { margin: 0 0 .7rem; font-size: .95rem; }
+.provider-overview-card h3 .metric-note { display: block; font-weight: 400; }
+.provider-overview-card dl { margin: 0; }
+.provider-overview-card dl div { display: flex; justify-content: space-between; gap: .75rem; padding: .4rem 0; border-bottom: 1px solid var(--line); font-size: .75rem; }
+.provider-overview-card dt { color: var(--muted); }
+.provider-overview-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.provider-overview-value { font: 500 1.1rem var(--mono); margin: .8rem 0; }
+.provider-overview-value span { color: var(--muted); font: .7rem var(--sans); }
 .tracked-spending { margin: 2rem 0 2.5rem; }
 .tracked-spending .section-header { margin-bottom: .5rem; }
 .tracked-spending-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: .85rem; }

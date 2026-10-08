@@ -10,12 +10,14 @@ import { createSubscription, nextRenewalOnOrAfter, normalizeCost, normalizedTota
 import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals } from './domain/usage-costs'
 import type { ConnectionStatuses } from './lib/connection-api'
+import type { HostingerDiscovery as HostingerState } from './lib/hostinger-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
 const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
 const hostinger = ref<InstanceType<typeof HostingerDiscovery>>()
 const connectionStatuses = ref<ConnectionStatuses>()
+const hostingerState = ref<HostingerState>()
 const subscriptions = ref<StoredSubscription[]>([])
 const storageError = ref<string | null>(null)
 const loading = ref(true)
@@ -45,7 +47,15 @@ const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
 const connectedMeteredProviders = computed(() => (['aws', 'cloudflare'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
 const meteredTotals = computed(() => usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value))
 const trackedTotals = computed(() => trackedSpendingTotals(totals.value, meteredTotals.value, connectedMeteredProviders.value, meterSnapshots.value))
+const providerUsage = computed(() => ({
+  aws: usageTotals(meterSnapshots.value, today.value, ['aws']),
+  cloudflare: usageTotals(meterSnapshots.value, today.value, ['cloudflare']),
+}))
+const hostingerLinkedIds = computed(() => new Set((hostingerState.value?.subscriptions ?? []).map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
+const hostingerFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider === 'Hostinger' || hostingerLinkedIds.value.has(item.id))))
+const manualFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider !== 'Hostinger' && !hostingerLinkedIds.value.has(item.id))))
 const configuredMeteredProviders = computed(() => (['aws', 'cloudflare'] as const).filter(provider => connectionStatuses.value?.[provider].configured))
+const meteredProviders = ['aws', 'cloudflare'] as const
 const meteredWarning = computed(() => {
   const failed = connectedMeteredProviders.value.filter(provider => costFeed.value.providers[provider].status === 'error')
   if (failed.length) return `${failed.map(provider => provider === 'aws' ? 'AWS' : 'Cloudflare').join(' and ')} sync failed. Last successful observations are shown where available.`
@@ -53,14 +63,17 @@ const meteredWarning = computed(() => {
   return stale.length ? `${stale.map(provider => provider === 'aws' ? 'AWS' : 'Cloudflare').join(' and ')} data is stale. Last known values remain visible.` : ''
 })
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
-const renewals = computed(() => upcomingRenewals(subscriptions.value, today.value, endDate(windowDays.value)))
+const currentHostingerLedger = computed(() => new Set((hostingerState.value?.subscriptions ?? []).filter(item => item.seenInLatestSync && hostingerState.value?.sync.status === 'synced').map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
+const confirmedSubscriptions = computed(() => subscriptions.value.filter(item => item.provider !== 'Hostinger' || !hostingerState.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id) || currentHostingerLedger.value.has(item.id)))
+const renewals = computed(() => upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(windowDays.value)))
+const hasStaleHostinger = computed(() => !!hostingerState.value?.subscriptions.some(item => item.linkedSubscriptionId && !item.seenInLatestSync))
 function chargeTotals(charges: Renewal[]): { currency: string; amount: number | null }[] {
   try { return renewalChargeTotals(charges) }
   catch { return [...new Set(charges.map(charge => charge.currency))].sort().map(currency => ({ currency, amount: null })) }
 }
-const due30 = computed(() => chargeTotals(upcomingRenewals(subscriptions.value, today.value, endDate(30))))
-const due365 = computed(() => chargeTotals(upcomingRenewals(subscriptions.value, today.value, endDate(365))))
-const due90 = computed(() => chargeTotals(upcomingRenewals(subscriptions.value, today.value, endDate(90))))
+const due30 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(30))))
+const due365 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(365))))
+const due90 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(90))))
 const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
 function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
@@ -135,6 +148,34 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
     <main id="overview" tabindex="-1">
       <header class="page-header"><div><p class="eyebrow">Your costs, in one place</p><h1>Overview<span class="heading-period">.</span></h1><p class="muted">Know what you pay. See what’s coming.</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><button class="primary-button" :disabled="blocked" @click="openForm()"><span aria-hidden="true">＋</span> Add subscription</button></header>
       <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload ledger</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
+      <section v-if="loaded" class="provider-overview" aria-labelledby="provider-overview-title">
+        <div class="section-header"><div><p class="eyebrow">Connected providers and fixed renewals</p><h2 id="provider-overview-title">Your spending</h2></div></div>
+        <div class="provider-overview-grid">
+          <article v-for="provider in meteredProviders" :key="provider" class="provider-overview-card">
+            <h3>{{ provider === 'aws' ? 'AWS' : 'Cloudflare' }} <span class="metric-note">Metered usage</span></h3>
+            <template v-if="providerUsage[provider].length">
+              <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>Actual charges to date · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month forecast</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : 'Forecast unavailable' }}</dd></div></dl>
+            </template>
+            <p v-else class="metric-note">{{ connectionStatuses?.[provider].configured ? 'Connected; billing observations are not available yet.' : 'Not connected' }}</p>
+            <p v-if="costFeed.providers[provider].status === 'error'" class="feed-warning" role="status">Sync failed; last known charges remain visible.</p>
+            <p v-else-if="isProviderStale(costFeed.providers[provider])" class="feed-warning" role="status">Last known charges are stale.</p>
+          </article>
+          <article class="provider-overview-card">
+            <h3>Hostinger <span class="metric-note">Fixed recurring commitments</span></h3>
+            <div v-for="total in hostingerFixedTotals" :key="total.currency" class="provider-overview-value">{{ money(total.monthly, total.currency) }} <span>/ mo equivalent</span></div>
+            <p v-if="!hostingerFixedTotals.length" class="metric-note">{{ connectionStatuses?.hostinger.configured ? 'Connected; eligible renewals appear after sync.' : 'Not connected' }}</p>
+            <p v-else class="metric-note">Included in fixed commitments and upcoming renewals.</p>
+          </article>
+          <article class="provider-overview-card">
+            <h3>Manual subscriptions <span class="metric-note">Fixed recurring commitments</span></h3>
+            <div v-for="total in manualFixedTotals" :key="total.currency" class="provider-overview-value">{{ money(total.monthly, total.currency) }} <span>/ mo equivalent</span></div>
+            <p v-if="!manualFixedTotals.length" class="metric-note">No manual subscriptions yet.</p>
+            <p v-else class="metric-note">Per-currency monthly equivalent; upcoming charges are listed below.</p>
+          </article>
+        </div>
+        <p class="metric-note">Actual charges to date are not a full-month projection. Forecasts already include actuals; currencies remain separate.</p>
+        <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger commitments use last-known provider details. They remain visible in the fixed ledger, but are omitted from upcoming-charge totals until confirmed by a successful sync.</p>
+      </section>
       <p v-if="loading" role="status">Loading your private ledger…</p>
       <p v-else-if="busy" role="status">Saving your ledger…</p>
       <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
@@ -169,7 +210,7 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
       </section>
       <LegacyImport :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
       <ConnectionsPanel @loaded="setConnectionStatuses" @changed="reloadFinancialViews" />
-      <HostingerDiscovery ref="hostinger" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" />
+      <HostingerDiscovery ref="hostinger" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" @loaded="hostingerState = $event" />
       <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :configured-providers="configuredMeteredProviders" :today="today" @loaded="costFeed = $event" />
       <CostHistory :snapshots="costFeed.snapshots" />
       <footer class="app-footer"><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved privately to your account. Imported browser ledgers remain untouched.</p></footer>
