@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 async function mockLedger(page: Page, initial: Record<string, unknown>[] = [], mockCosts = true) {
   let subscriptions = initial
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
   if (mockCosts) await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
   await page.route('**/api/subscriptions**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
@@ -129,4 +130,47 @@ test('explicit legacy import backs up original JSON, preserves existing account 
   expect(await page.evaluate(() => localStorage.getItem('ledger.subscriptions.v1'))).toBe(raw)
   await page.reload()
   await expect(page.getByRole('row').filter({ hasText: 'VPS' })).toBeVisible()
+})
+
+
+test('connections keep secrets request-only, preserve revisions, and refresh providers explicitly', async ({ page }) => {
+  await mockLedger(page)
+  let revision = 0, configured = false, refreshCalls = 0
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured, revision }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
+  await page.route('**/api/connections/aws', async route => {
+    const request = route.request()
+    if (request.method() === 'PUT') {
+      expect(request.postDataJSON()).toEqual({ credentials: { accessKeyId: 'test-key', secretAccessKey: 'test-secret' }, revision })
+      configured = true; revision++
+    } else {
+      expect(request.method()).toBe('DELETE'); expect(request.postData()).toBeNull(); expect(request.headers()['if-match']).toBe(`"${revision}"`)
+      configured = false; revision++
+    }
+    return route.fulfill({ json: { configured, revision } })
+  })
+  await page.route('**/api/costs/refresh', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; return route.fulfill({ status: 204 }) })
+  await page.goto('./')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
+  await expect(card.getByText('Not configured', { exact: true })).toBeVisible()
+  await card.locator('summary').click()
+  await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
+  await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
+  await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
+  await expect(card.getByText('Credentials saved', { exact: true })).toBeVisible()
+  await expect(card.getByLabel('Access key ID', { exact: true })).toHaveValue('')
+  await expect(card.getByLabel('Secret access key', { exact: true })).toHaveValue('')
+  expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('test-secret')
+  await page.locator('#infrastructure').getByRole('button', { name: 'Refresh providers', exact: true }).click()
+  await expect(page.locator('#infrastructure').getByRole('button', { name: 'Refresh providers', exact: true })).toBeEnabled()
+  expect(refreshCalls).toBe(1)
+  page.on('dialog', dialog => dialog.accept())
+  await card.getByRole('button', { name: 'Disconnect Amazon Web Services' }).click()
+  await expect(card.getByText('Not configured', { exact: true })).toBeVisible()
+  await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
+  await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
+  await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
+  await expect(card.getByText('Credentials saved', { exact: true })).toBeVisible()
+  expect(revision).toBe(3)
+  await page.setViewportSize({ width: 320, height: 1000 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })

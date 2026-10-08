@@ -1,8 +1,10 @@
 // Server/Actions only: the SDK resolves AWS credentials from the server environment or role.
 import { CostExplorerClient, GetCostAndUsageCommand, GetCostForecastCommand, type GetCostAndUsageCommandOutput, type GetCostForecastCommandOutput } from '@aws-sdk/client-cost-explorer'
+import { FetchHttpHandler } from '@smithy/fetch-http-handler'
 import { createCostSnapshot, normalizeUsageAmount, type CostBreakdown, type CostSnapshot } from '../../src/domain/usage-costs.ts'
 
 export type AwsCostClient = { send(command: GetCostAndUsageCommand | GetCostForecastCommand, options?: { abortSignal?: AbortSignal }): Promise<unknown> }
+export type AwsClientCredentials = { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
 export type AwsCostOptions = { client?: AwsCostClient; now?: Date; timeoutMs?: number; includeServiceBreakdown?: boolean }
 
 export class AwsCostError extends Error {
@@ -20,8 +22,9 @@ function safeError(error: unknown): AwsCostError {
   return new AwsCostError(['AccessDeniedException', 'UnrecognizedClientException', 'CredentialsProviderError', 'ExpiredTokenException'].includes(name) ? 'credentials' : name === 'AbortError' ? 'timeout' : 'provider')
 }
 
-export function createAwsClient(): AwsCostClient {
-  return new CostExplorerClient({ region: 'us-east-1', maxAttempts: 2 })
+export function createAwsClient(credentials?: AwsClientCredentials): AwsCostClient {
+  // Workers requires explicit credentials and Fetch; the Node CLI retains its role/environment chain.
+  return new CostExplorerClient({ region: 'us-east-1', maxAttempts: 2, ...(credentials ? { credentials, requestHandler: new FetchHttpHandler() } : {}) })
 }
 
 async function request(client: AwsCostClient, command: GetCostAndUsageCommand | GetCostForecastCommand, timeoutMs: number): Promise<unknown> {

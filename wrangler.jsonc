@@ -8,6 +8,7 @@
   ],
   "workers_dev": false,
   "preview_urls": false,
+  "triggers": { "crons": ["17 */6 * * *"] },
   "assets": {
     "directory": ".output/public",
     "binding": "ASSETS",
@@ -32,6 +33,11 @@
     "OWNER_EMAIL": "quentin.goinaud@gmail.com"
   },
   "ratelimits": [
+    {
+      "name": "COST_REFRESH_RATE_LIMIT",
+      "namespace_id": "2026100802",
+      "simple": { "limit": 2, "period": 60 }
+    },
     {
       "name": "LOGIN_RATE_LIMIT",
       "namespace_id": "2026100801",

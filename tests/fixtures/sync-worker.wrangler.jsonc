@@ -1,0 +1,9 @@
+{
+  "name": "stackdues-sync-test-fixture",
+  "main": "./sync-worker.ts",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "d1_databases": [{ "binding": "DB", "database_name": "test-sync", "database_id": "00000000-0000-0000-0000-000000000003" }]
+}

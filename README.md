@@ -18,7 +18,7 @@ Use Node.js 24 and `npm ci`. `npm run dev` starts Nuxt on localhost. The dashboa
 
 Fixed subscriptions and metered observations remain separate domain models. Arbitrary day/week/month/year recurrences retain the original charge; normalized equivalents use 365 days or 12 months per year. Calendar renewals are UTC, anchored to their original day and clamped at month ends without drift. Paused/cancelled entries are excluded. Totals are grouped by currency, with no implied exchange conversion.
 
-Actual provider observations are immutable and timestamped. Whole-month forecasts already include actual costs and are never added to actuals. Missing forecasts prevent misleading combined estimates; failed providers retain their previous observations. The dashboard reads `/api/costs`, with no public billing JSON. The endpoint reads immutable D1 observations and sync status; provider ingestion is enabled in the Workers sync slice.
+Actual provider observations are immutable and timestamped. Whole-month forecasts already include actual costs and are never added to actuals. Missing forecasts prevent misleading combined estimates; failed providers retain their previous observations. The dashboard reads `/api/costs`, with no public billing JSON. The endpoint reads immutable D1 observations and sync status; authenticated manual refresh and Workers Cron Triggers ingest provider data without deployment.
 
 ## Private persistence and browser import
 
@@ -40,13 +40,21 @@ D1 stores only the owner's salted PBKDF2-SHA256 hash (100,000 iterations, the Wo
 
 Create the D1 binding, apply `npx wrangler d1 migrations apply stackdues --remote`, configure Worker Secrets through protected stdin/file input, build with `npm run build`, then `npm run deploy`. CI creates only a temporary local D1 database with fake credentials for runtime tests. It never creates an owner account in production or reads billing secrets.
 
-GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed, and the legacy Pages deployment and scheduled workflow are disabled to remove the alternate public host. Provider credentials belong only in Workers Secrets. Roll back by deploying the previous reviewed commit with the same gate and bindings; D1 data does not roll back with Worker code.
+GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed, and the legacy Pages deployment and scheduled workflow are disabled to remove the alternate public host. Provider credentials are entered in the authenticated interface and encrypted in D1; the independent encryption key lives only in Workers Secrets. Roll back by deploying the previous reviewed commit with the same gate and bindings; D1 data does not roll back with Worker code.
+
+## Connections and refresh
+
+Use Connections to save or replace AWS, Cloudflare and Hostinger credentials. Secret inputs are cleared after submission and are never prefilled from the server or placed in browser storage. The server returns only configured/revision/update status. Replacement and disconnect use revisions to reject stale changes; disconnect keeps financial history. Hostinger discovery is delivered in its own slice.
+
+`CREDENTIALS_KEY` is a separate random 32-byte key encoded as 64 hex characters in Workers Secrets. Provider-specific JSON is encrypted with AES-GCM, a new 12-byte IV for every write, and provider/version-bound additional authenticated data. D1 stores ciphertext, IV and revision; missing/wrong keys or tampering fail closed. Do not rotate this key without re-encrypting saved credentials or reconnecting every provider. Backups must retain both D1 data and secure key access. Never reuse the session key or password as the encryption key.
+
+**Refresh providers** calls the authenticated sync endpoint; **Reload cost data** reads stored observations without provider requests. Manual refresh allows two requests per minute per Worker location. Cron runs at minute 17 every six hours (UTC), using the same provider collection and atomic persistence path. Missing credentials show Not connected; a failed provider retains its history and does not block another provider. Every collection has a capture timestamp and deterministic IDs, so retried captures do not duplicate observations. Credentials are decrypted only server-side during collection.
 
 ## Provider adapters
 
 AWS uses Cost Explorer's `us-east-1` endpoint, MTD UnblendedCost through the previous UTC day, matched prior-month comparison, service breakdowns and available forecasts. The Workers compatibility spike proves request signing and response handling with explicit secret bindings and `FetchHttpHandler`; the Node default credential chain does not work in Workers. Required billing permissions are `ce:GetCostAndUsage` and `ce:GetCostForecast`.
 
-Cloudflare's existing adapter reads priced PayGo charge rows; it does not sum cumulative values or unpriced quantities and does not invent unavailable forecasts. The Workers sync slice will verify the currently supported endpoint before enabling ingestion.
+Cloudflare's existing adapter reads priced PayGo charge rows; it does not sum cumulative values or unpriced quantities and does not invent unavailable forecasts. It uses the supported v1 `/accounts/{account_id}/billable-usage` endpoint with an Account Billing Read token; v2 unpriced usage is not used.
 
 The retained `scripts/refresh-costs.ts` is a V1 offline helper covered by historical regression tests, not a deployment or CI ingestion step. It must not be used to publish private billing data.
 

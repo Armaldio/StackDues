@@ -1,5 +1,4 @@
-import { CostExplorerClient, GetCostAndUsageCommand } from '@aws-sdk/client-cost-explorer'
-import { FetchHttpHandler } from '@smithy/fetch-http-handler'
+import { GetCostAndUsageCommand } from '@aws-sdk/client-cost-explorer'
 import { createAwsClient, fetchAwsCosts } from '../../server/providers/aws.ts'
 
 // Local workerd fixture only. These credentials are deliberately fake; every SDK
@@ -32,12 +31,7 @@ export default {
       try {
         await createAwsClient().send(new GetCostAndUsageCommand({ TimePeriod: { Start: '2026-10-01', End: '2026-10-08' }, Granularity: 'MONTHLY', Metrics: ['UnblendedCost'] }))
       } catch (error) { missingCredentials = (error as Error).message }
-      const client = new CostExplorerClient({
-        region: 'us-east-1',
-        maxAttempts: 2,
-        credentials: { accessKeyId: 'TESTACCESSKEY', secretAccessKey: 'TESTFAKESECRETNOTREAL', sessionToken: 'TESTSESSIONTOKEN' },
-        requestHandler: new FetchHttpHandler(),
-      })
+      const client = createAwsClient({ accessKeyId: 'TESTACCESSKEY', secretAccessKey: 'TESTFAKESECRETNOTREAL', sessionToken: 'TESTSESSIONTOKEN' })
       const snapshots = await fetchAwsCosts({ client, now: new Date('2026-10-08T12:00:00Z') })
       return Response.json({ missingCredentials, requests, snapshots: snapshots.map(({ provider, amount, currency, kind, metadata }) => ({ provider, amount, currency, kind, period: metadata?.period })) })
     } catch (error) {

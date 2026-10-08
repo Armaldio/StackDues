@@ -15,7 +15,9 @@
     "test:worker": "node --test tests/worker-security.integration.ts",
     "test:aws-worker": "node --test tests/aws-worker.integration.ts",
     "cf:types": "wrangler types --env-interface CloudflareEnv",
-    "test:d1": "node --test tests/d1.integration.ts"
+    "test:d1": "node --test tests/d1.integration.ts",
+    "test:provider-credentials": "node --test tests/provider-credentials.test.ts tests/provider-credentials.integration.ts",
+    "test:worker-sync": "node --test tests/worker-sync.integration.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cost-explorer": "^3.1147.0",

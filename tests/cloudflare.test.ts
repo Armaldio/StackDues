@@ -46,6 +46,14 @@ test('empty Cloudflare data does not manufacture a zero-dollar actual snapshot',
   assert.deepEqual(await collectCloudflareCosts({ ...options, fetch: async () => response([]) }), [])
 })
 
+test('replaying a Cloudflare capture produces stable IDs and separate later observations', async () => {
+  const collect = (now: Date) => collectCloudflareCosts({ ...options, now, fetch: async () => response([row]) })
+  const first = await collect(options.now)
+  assert.deepEqual(await collect(options.now), first)
+  const later = await collect(new Date(options.now.getTime() + 1000))
+  assert.notEqual(later[0]?.id, first[0]?.id)
+})
+
 test('Cloudflare preserves its reported interval when the charge ends during the day', async () => {
   const [snapshot] = await collectCloudflareCosts({ ...options, fetch: async () => response([
     { ...row, ChargePeriodEnd: '2026-10-06T23:59:59Z' },

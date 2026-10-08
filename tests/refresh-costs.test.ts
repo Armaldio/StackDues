@@ -17,8 +17,16 @@ test('previous deployment snapshots and sync dates are recovered for later refre
   assert.deepEqual(await loadPreviousFeed('https://example.test/data', async () => Response.json(state)), parseCostFeed(state))
 })
 test('publication is opt-in and missing credentials never trigger a provider call', async () => {
-  assert.deepEqual(await runRefresh({ AWS_ACCESS_KEY_ID: 'private', AWS_SECRET_ACCESS_KEY: 'private', PREVIOUS_COST_FEED_URL: 'https://must-not-request.invalid' }), emptyCostFeed())
-  assert.deepEqual(await runRefresh({ PUBLISH_PROVIDER_COSTS: 'true' }), emptyCostFeed())
+  for (const state of [
+    await runRefresh({ AWS_ACCESS_KEY_ID: 'private', AWS_SECRET_ACCESS_KEY: 'private', PREVIOUS_COST_FEED_URL: 'https://must-not-request.invalid' }),
+    await runRefresh({ PUBLISH_PROVIDER_COSTS: 'true' }),
+  ]) {
+    assert.deepEqual(state.snapshots, [])
+    for (const provider of [state.providers.aws, state.providers.cloudflare]) {
+      assert.equal(provider.status, 'not-configured')
+      if (provider.lastAttemptAt !== undefined) assert.ok(Number.isFinite(Date.parse(provider.lastAttemptAt)))
+    }
+  }
 })
 test('atomic feed writer publishes only validated public fields and preserves file on validation failure', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ledger-feed-'))
