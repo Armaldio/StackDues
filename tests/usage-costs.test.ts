@@ -47,6 +47,26 @@ test('latest captures deduplicate only identical provider periods kinds and curr
   assert.deepEqual(latestCostSnapshots([base, newest, forecast]).map(item => item.id).sort(), ['aws-2', 'forecast'])
 })
 
+test('latest history captures preserve provider periods, currencies, credits and forecasts without mutating input', () => {
+  const olderCredit = { ...base, id: 'cf-eur-old', provider: 'cloudflare' as const, currency: 'EUR', amount: -4, capturedAt: '2026-10-07T12:00:00Z' }
+  const newerCredit = { ...olderCredit, id: 'cf-eur-new', amount: -2, capturedAt: '2026-10-07T13:00:00Z' }
+  const awsEur = { ...base, id: 'aws-eur', currency: 'EUR', amount: 8 }
+  const awsOtherPeriod = { ...base, id: 'aws-prior', periodStart: '2026-09-01', periodEnd: '2026-10-01', amount: 7 }
+  const forecast = { ...newerCredit, id: 'cf-forecast', kind: 'forecast' as const, amount: 10 }
+  const input = [olderCredit, newerCredit, awsEur, awsOtherPeriod, forecast]
+  const original = [...input]
+
+  assert.deepEqual(latestCostSnapshots(input).map(item => item.id).sort(), ['aws-eur', 'aws-prior', 'cf-eur-new', 'cf-forecast'].sort())
+  assert.deepEqual(input, original)
+})
+
+test('latest captures resolve equal timestamps deterministically by snapshot id', () => {
+  const z = { ...base, id: 'z-capture' }
+  const a = { ...base, id: 'a-capture', capturedAt: '2026-10-07T07:00:00-05:00' }
+  assert.equal(latestCostSnapshots([z, a])[0]?.id, 'z-capture')
+  assert.equal(latestCostSnapshots([a, z])[0]?.id, 'z-capture')
+})
+
 test('current usage excludes comparisons and obsolete captures without double-counting forecasts', () => {
   const newer = { ...base, id: 'aws-2', capturedAt: '2026-10-08T12:00:00Z', periodEnd: '2026-10-08', amount: 15 }
   const forecast = { ...newer, id: 'forecast', kind: 'forecast' as const, periodEnd: '2026-11-01', amount: 60 }

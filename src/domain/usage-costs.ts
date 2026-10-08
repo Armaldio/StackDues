@@ -78,7 +78,9 @@ export function latestCostSnapshots(snapshots: readonly CostSnapshot[]): CostSna
   for (const snapshot of snapshots) {
     const key = JSON.stringify([snapshot.provider, snapshot.periodStart, snapshot.periodEnd, snapshot.kind, snapshot.currency])
     const previous = latest.get(key)
-    if (!previous || Date.parse(snapshot.capturedAt) > Date.parse(previous.capturedAt)) latest.set(key, snapshot)
+    const capturedAt = Date.parse(snapshot.capturedAt)
+    const previousCapturedAt = previous ? Date.parse(previous.capturedAt) : -Infinity
+    if (!previous || capturedAt > previousCapturedAt || (capturedAt === previousCapturedAt && snapshot.id.localeCompare(previous.id) > 0)) latest.set(key, snapshot)
   }
   return [...latest.values()].sort((a, b) => a.capturedAt.localeCompare(b.capturedAt) || a.id.localeCompare(b.id))
 }
