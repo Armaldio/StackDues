@@ -64,6 +64,12 @@ test('first run prioritizes provider connections and preserves a keyboard-friend
   await expect(addManually).toBeVisible()
   await expect(page.getByText('Try example subscriptions')).toHaveCount(0)
   await expect(page.getByRole('row')).toHaveCount(0)
+  const emptyDownloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download subscriptions JSON' }).click()
+  const emptyDownload = await emptyDownloadPromise
+  expect(emptyDownload.suggestedFilename()).toBe('stackdues-subscriptions.json')
+  const { readFile } = await import('node:fs/promises')
+  expect(await readFile((await emptyDownload.path())!, 'utf8')).toBe('[]')
   const nav = page.getByRole('navigation', { name: 'Primary' })
   await expect(nav.getByRole('link')).toHaveCount(4)
   await expect(nav.getByRole('link')).toHaveText(['Overview', 'Subscriptions 0', 'Connections', 'History'])
@@ -121,6 +127,45 @@ test('fresh subscriptions support real recurrence, edits, status changes, deleti
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).not.toBeVisible()
   expect(errors).toEqual([])
+})
+
+test('subscription export contains importer-compatible account records without server-only fields', async ({ page }) => {
+  const subscription = { id: 'hostinger-domain', name: 'Example domain', provider: 'Hostinger', billingType: 'fixed', amount: 12, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2027-10-08', status: 'active', revision: 9, encryptedCredentials: 'private-provider-secret', sessionToken: 'private-session-token' }
+  let writes = 0
+  await mockLedger(page, [subscription])
+  await page.route('**/api/subscriptions**', async route => {
+    if (route.request().method() !== 'GET') writes++
+    await route.fallback()
+  })
+  await page.goto('./')
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Download subscriptions JSON' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('stackdues-subscriptions.json')
+  const { readFile } = await import('node:fs/promises')
+  const json = await readFile((await download.path())!, 'utf8')
+  expect(JSON.parse(json)).toEqual([{ id: 'hostinger-domain', name: 'Example domain', provider: 'Hostinger', billingType: 'fixed', amount: 12, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2027-10-08', status: 'active' }])
+  expect(json).not.toMatch(/revision|encryptedCredentials|private-provider-secret|sessionToken|private-session-token/)
+  expect(writes).toBe(0)
+  await expect(page.getByRole('row').filter({ hasText: 'Example domain' })).toBeVisible()
+})
+
+test('subscription export failures stay visible and never mutate the account', async ({ page }) => {
+  await page.addInitScript(() => { URL.createObjectURL = () => { throw new Error('browser download blocked') } })
+  await mockLedger(page, [{ id: 'keep', name: 'Keep me', billingType: 'fixed', amount: 5, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: '2026-10-08', status: 'active', revision: 1 }])
+  await page.goto('./')
+  await page.getByRole('button', { name: 'Download subscriptions JSON' }).click()
+  await expect(page.getByRole('alert')).toContainText('Your account was not changed')
+  await expect(page.getByRole('row').filter({ hasText: 'Keep me' })).toBeVisible()
+})
+
+test('subscription export stays disabled when the protected ledger request fails', async ({ page }) => {
+  await mockLedger(page)
+  await page.route('**/api/subscriptions**', route => route.fulfill({ status: 503, body: 'private-provider-secret' }))
+  await page.goto('./')
+  const exportButton = page.getByRole('button', { name: 'Download subscriptions JSON' })
+  await expect(exportButton).toBeDisabled()
+  await expect(page.getByRole('alert')).not.toContainText('private-provider-secret')
 })
 
 test('provider observations, incomplete forecasts, failures, stale data, and immutable history render separately', async ({ page }) => {
