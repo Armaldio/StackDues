@@ -29,10 +29,12 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
     assert.match(await (await request('/register')).text(), /One-time setup code/)
     assert.equal((await post('/auth/register', {}, 'https://foreign.example')).status, 403)
+    const opaqueOriginPost = (fields: Record<string, string>, site: string) => request('/auth/register', { method: 'POST', headers: { Origin: 'null', 'Sec-Fetch-Site': site, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields) })
+    assert.equal((await opaqueOriginPost({}, 'cross-site')).status, 403)
     const fields = { email: 'owner@example.com', password: 'a-safe-local-test-password', code: 'local-test-setup-code' }
     const wrong = await post('/auth/register', { ...fields, code: 'wrong-code' })
     assert.equal(wrong.headers.get('set-cookie'), null)
-    const registered = await post('/auth/register', fields)
+    const registered = await opaqueOriginPost(fields, 'same-origin')
     assert.equal(registered.status, 303, await registered.clone().text())
     const setCookie = registered.headers.get('set-cookie')!
     assert.match(setCookie, /__Host-stackdues_session=/); assert.match(setCookie, /Secure; HttpOnly; SameSite=Strict/)
