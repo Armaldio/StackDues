@@ -66,6 +66,16 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .metric:first-child { border-left: 0; }
 .metric-value { font: 500 1.2rem/1.5 var(--mono); margin-top: .75rem; overflow-wrap: anywhere; }
 .summary-footnote { color: var(--muted); font-size: .7rem; margin: .75rem 0 2.5rem; }
+.tracked-spending { margin: 2rem 0 2.5rem; }
+.tracked-spending .section-header { margin-bottom: .5rem; }
+.tracked-spending-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: .85rem; }
+.tracked-spending-card { min-width: 0; padding: 1.2rem; border: 1px solid var(--line); background: var(--surface); }
+.tracked-spending-card h3 { margin: 0 0 .8rem; font: 500 1.2rem var(--mono); }
+.tracked-spending-card dl { margin: 0; }
+.tracked-spending-card dl div { display: flex; justify-content: space-between; gap: .75rem; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .78rem; }
+.tracked-spending-card dt { color: var(--muted); }
+.tracked-spending-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.tracked-spending-card .combined-total { font-size: .82rem; font-weight: 600; }
 .content-columns { display: grid; grid-template-columns: 1.4fr 1fr; gap: 2rem; margin-bottom: 2.5rem; align-items: start; }
 .section-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
 .section-header .eyebrow { font-size: .65rem; margin-bottom: .4rem; }

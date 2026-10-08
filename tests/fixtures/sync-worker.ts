@@ -11,7 +11,7 @@ type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'credenti
 // Local-only fixture. Neither the SDK client nor fetch can contact real providers.
 export default {
   async fetch(request: Request, env: { DB: D1Database }): Promise<Response> {
-    const input = await request.json() as { action: string; mode?: Mode; now?: string; sql?: string }
+    const input = await request.json() as { action: string; mode?: Mode; now?: string; sql?: string; providers?: ('aws' | 'cloudflare')[] }
     try {
       if (input.action === 'initialize') {
         await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
@@ -51,7 +51,7 @@ export default {
         timeoutMs: mode === 'timeout' ? 5 : 1000,
       }
       // Both execution triggers call this exact production function with their timestamp.
-      const feed = await syncCosts({ DB: env.DB }, new Date(input.now ?? '2026-10-08T12:00:00Z'), dependencies)
+      const feed = await syncCosts({ DB: env.DB }, new Date(input.now ?? '2026-10-08T12:00:00Z'), dependencies, input.providers)
       return Response.json({ feed, calls })
     } catch (error) {
       return Response.json({ message: error instanceof LedgerError ? error.message : 'Fixture request failed.' }, { status: error instanceof LedgerError ? error.statusCode : 500 })

@@ -101,7 +101,7 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
   await expect(infrastructure.getByText('EC2', { exact: true })).toBeVisible()
   await expect(infrastructure.getByText('R2 Storage', { exact: true })).toBeVisible()
   await expect(infrastructure.getByText('Sync failed', { exact: true })).toBeVisible()
-  await expect(infrastructure.getByText(/Forecast covers only some providers/)).toBeVisible()
+  await expect(infrastructure.getByText(/Combined estimate unavailable until every connected provider reports a complete forecast/)).toBeVisible()
   await expect(page.locator('body')).not.toContainText('raw-provider-secret')
   await expect(page.locator('#history')).toContainText('AWS')
   feed.snapshots[2]!.capturedAt = stale
@@ -144,7 +144,7 @@ test('explicit legacy import backs up original JSON, preserves existing account 
 })
 
 
-test('connections keep secrets request-only, preserve revisions, and refresh providers explicitly', async ({ page }) => {
+test('connections keep secrets request-only, preserve revisions, and automatically refresh providers', async ({ page }) => {
   await mockLedger(page)
   let revision = 0, configured = false, refreshCalls = 0
   await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured, revision }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
@@ -159,7 +159,7 @@ test('connections keep secrets request-only, preserve revisions, and refresh pro
     }
     return route.fulfill({ json: { configured, revision } })
   })
-  await page.route('**/api/costs/refresh', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; return route.fulfill({ status: 204 }) })
+  await page.route('**/api/costs/refresh*', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; return route.fulfill({ status: 204 }) })
   await page.goto('./')
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
   await expect(card.getByText('Not configured', { exact: true })).toBeVisible()
@@ -167,23 +167,73 @@ test('connections keep secrets request-only, preserve revisions, and refresh pro
   await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
   await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
   await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
-  await expect(card.getByText('Credentials saved', { exact: true })).toBeVisible()
+  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  expect(refreshCalls).toBe(1)
   await expect(card.getByLabel('Access key ID', { exact: true })).toHaveValue('')
   await expect(card.getByLabel('Secret access key', { exact: true })).toHaveValue('')
   expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('test-secret')
   await page.locator('#infrastructure').getByRole('button', { name: 'Refresh providers', exact: true }).click()
   await expect(page.locator('#infrastructure').getByRole('button', { name: 'Refresh providers', exact: true })).toBeEnabled()
-  expect(refreshCalls).toBe(1)
+  expect(refreshCalls).toBe(2)
   page.on('dialog', dialog => dialog.accept())
   await card.getByRole('button', { name: 'Disconnect Amazon Web Services' }).click()
   await expect(card.getByText('Not configured', { exact: true })).toBeVisible()
   await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
   await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
   await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
-  await expect(card.getByText('Credentials saved', { exact: true })).toBeVisible()
+  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  expect(refreshCalls).toBe(4)
   expect(revision).toBe(3)
   await page.setViewportSize({ width: 320, height: 1000 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('connecting AWS automatically updates Overview, Infrastructure and History without double-counting actuals', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const start = `${today.slice(0, 7)}-01`
+  const endDate = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1)).toISOString().slice(0, 10)
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const fixed = { id: 'fixed-monthly', name: 'Fixed VPS', billingType: 'fixed', amount: 120, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: today, status: 'active', revision: 1 }
+  await mockLedger(page, [fixed])
+  let configured = false, synced = false
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured, revision: configured ? 1 : 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
+  await page.route('**/api/connections/aws', async route => { configured = true; return route.fulfill({ json: { configured: true, revision: 1 } }) })
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: synced ? [
+    { id: 'aws-actual', provider: 'aws', periodStart: start, periodEnd: endDate, amount: 3, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+    { id: 'aws-forecast', provider: 'aws', periodStart: start, periodEnd: endDate, amount: 10, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
+  ] : [], providers: { aws: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
+  await page.route('**/api/costs/refresh*', async route => { expect(new URL(route.request().url()).searchParams.get('provider')).toBe('aws'); synced = true; return route.fulfill({ status: 204 }) })
+  await page.goto('./')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
+  await card.locator('summary').click()
+  await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
+  await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
+  await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 120.00')
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 3.00')
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 10.00')
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 130.00')
+  await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$3.00')
+  await expect(page.locator('#history')).toContainText('AWS')
+})
+
+test('connecting Hostinger automatically discovers subscriptions without pressing Sync', async ({ page }) => {
+  await mockLedger(page)
+  let configured = false, syncCalls = 0
+  const row = { externalId: 'host-kvm', name: 'KVM from Hostinger', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: '2026-11-08T00:00:00.000Z', linkedSubscriptionId: null, seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
+  const syncedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured, revision: configured ? 1 : 0 } } }))
+  await page.route('**/api/connections/hostinger', async route => { configured = true; return route.fulfill({ json: { configured: true, revision: 1 } }) })
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: configured && syncCalls ? [row] : [], sync: configured && syncCalls ? { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } : { status: 'not-configured' } } }))
+  await page.route('**/api/hostinger/subscriptions/sync', async route => { syncCalls++; return route.fulfill({ json: { subscriptions: [row], sync: { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } } }) })
+  await page.goto('./')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Hostinger', exact: true }) })
+  await card.locator('summary').click()
+  await card.getByLabel('API token', { exact: true }).fill('hostinger-test-token')
+  await card.getByRole('button', { name: 'Save Hostinger connection' }).click()
+  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(page.locator('#hostinger-discovery')).toContainText('KVM from Hostinger')
+  expect(syncCalls).toBe(1)
 })
 
 test('Hostinger renewal discovery stays out of totals until linked or added and preserves existing values', async ({ page }) => {

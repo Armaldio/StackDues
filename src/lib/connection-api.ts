@@ -1,4 +1,5 @@
 import { isValidCostTimestamp } from '../domain/usage-costs.ts'
+import type { CostProvider } from '../domain/usage-costs.ts'
 
 export type ConnectionProvider = 'aws' | 'cloudflare' | 'hostinger'
 export type ConnectionStatus = { configured: boolean; revision: number; updatedAt?: string }
@@ -53,4 +54,13 @@ export async function deleteConnection(provider: ConnectionProvider, revision: n
   if (status.configured || status.revision <= revision) throw new ConnectionApiError('The disconnection could not be confirmed. Reload connections before trying again.')
   return status
 }
-export async function refreshProviders(): Promise<void> { await request('/api/costs/refresh', 'POST') }
+const refreshing = new Map<string, Promise<void>>()
+export async function refreshProviders(provider?: CostProvider): Promise<void> {
+  const key = provider ?? 'all'
+  const current = refreshing.get(key)
+  if (current) return current
+  const url = provider ? `/api/costs/refresh?provider=${provider}` : '/api/costs/refresh'
+  const operation = request(url, 'POST').then(() => undefined).finally(() => refreshing.delete(key))
+  refreshing.set(key, operation)
+  return operation
+}

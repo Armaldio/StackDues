@@ -36,7 +36,7 @@
     {
       "name": "COST_REFRESH_RATE_LIMIT",
       "namespace_id": "2026100802",
-      "simple": { "limit": 2, "period": 60 }
+      "simple": { "limit": 4, "period": 60 }
     },
     {
       "name": "LOGIN_RATE_LIMIT",

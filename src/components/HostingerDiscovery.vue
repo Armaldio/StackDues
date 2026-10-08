@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { StoredSubscription } from '../lib/subscription-api'
 import { addHostingerSubscription, HostingerApiError, linkHostingerSubscription, readHostingerDiscovery, syncHostinger, type HostingerDiscovery as Discovery } from '../lib/hostinger-api'
 
-const props = defineProps<{ ledger: StoredSubscription[] }>()
+const props = defineProps<{ ledger: StoredSubscription[]; configured: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
 const state = ref<Discovery>()
 const loading = ref(false)
@@ -19,7 +19,13 @@ const period = (item: Discovery['subscriptions'][number]) => item.recurrenceInte
 async function load() {
   if (loading.value || busyId.value) return
   loading.value = true
-  try { setState(await readHostingerDiscovery()); error.value = ''; expired.value = false }
+  try {
+    let next = await readHostingerDiscovery()
+    const lastAttempt = next.sync.lastAttemptAt ?? next.sync.lastSyncedAt
+    const elapsed = lastAttempt ? Date.now() - Date.parse(lastAttempt) : Infinity
+    if (props.configured && elapsed >= 6 * 60 * 60 * 1000) { next = await syncHostinger(); emit('changed') }
+    setState(next); error.value = ''; expired.value = false
+  }
   catch (cause) { fail(cause) }
   finally { loading.value = false }
 }
@@ -31,7 +37,7 @@ function fail(cause: unknown) { error.value = cause instanceof Error ? cause.mes
 async function refresh() {
   if (loading.value || busyId.value) return
   loading.value = true; error.value = ''; notice.value = ''
-  try { setState(await syncHostinger()); notice.value = 'Hostinger services refreshed. Discovered services stay outside commitment totals until you add or link them.' }
+  try { setState(await syncHostinger()); notice.value = 'Hostinger services refreshed. Discovered services stay outside commitment totals until you add or link them.'; emit('changed') }
   catch (cause) { fail(cause) }
   finally { loading.value = false }
 }
@@ -54,6 +60,8 @@ async function link(item: Discovery['subscriptions'][number]) {
   finally { busyId.value = '' }
 }
 onMounted(load)
+defineExpose({ reload: load })
+watch(() => props.configured, configured => { if (configured) void load() })
 </script>
 
 <template>

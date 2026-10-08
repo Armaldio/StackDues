@@ -40,3 +40,15 @@ test('manual refresh makes authenticated POST and accepts empty success response
   t.mock.method(globalThis, 'fetch', async (url: unknown, options?: RequestInit) => { assert.equal(url, '/api/costs/refresh'); assert.equal(options?.method, 'POST'); assert.equal(options?.credentials, 'same-origin'); return new Response(null, { status: 204 }) })
   await refreshProviders()
 })
+test('provider-specific refresh is scoped and duplicate in-flight requests coalesce', async t => {
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async (url: unknown, options?: RequestInit) => {
+    calls++
+    assert.equal(url, '/api/costs/refresh?provider=cloudflare')
+    assert.equal(options?.method, 'POST')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    return new Response(null, { status: 204 })
+  })
+  await Promise.all([refreshProviders('cloudflare'), refreshProviders('cloudflare')])
+  assert.equal(calls, 1)
+})

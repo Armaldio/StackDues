@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createCostSnapshot, latestCostSnapshots, normalizeUsageAmount, usageTotals, type CostSnapshot } from '../src/domain/usage-costs.ts'
+import { createCostSnapshot, latestCostSnapshots, normalizeUsageAmount, trackedSpendingTotals, usageTotals, type CostSnapshot } from '../src/domain/usage-costs.ts'
 
 const base: CostSnapshot = { id: 'aws-1', provider: 'aws', periodStart: '2026-10-01', periodEnd: '2026-10-07', amount: 12.5, currency: 'USD', kind: 'actual', capturedAt: '2026-10-07T12:00:00Z', metadata: { period: 'current' } }
 
@@ -9,6 +9,23 @@ test('usage decimal normalization retains precision and billing credits', () => 
   assert.equal(normalizeUsageAmount('-2.5'), -2.5)
   assert.equal(normalizeUsageAmount(0), 0)
   for (const value of ['', ' ', 'NaN', 'Infinity', '1USD', '0x10', true, null, undefined, NaN, Infinity, {}, '1e3']) assert.throws(() => normalizeUsageAmount(value), /finite decimal/i)
+})
+
+test('tracked totals add fixed commitments to complete forecasts, never actuals twice, and preserve fixed-only currencies', () => {
+  const snapshots = [
+    { ...base, id: 'aws-actual', amount: 15, capturedAt: '2026-10-08T12:00:00Z' },
+    { ...base, id: 'aws-forecast', amount: 50, kind: 'forecast' as const, capturedAt: '2026-10-08T12:00:00Z' },
+    { ...base, id: 'cf-actual', provider: 'cloudflare' as const, amount: 5, capturedAt: '2026-10-08T12:00:00Z' },
+    { ...base, id: 'cf-forecast', provider: 'cloudflare' as const, amount: 10, kind: 'forecast' as const, capturedAt: '2026-10-08T12:00:00Z' },
+  ]
+  const usage = usageTotals(snapshots, '2026-10-08')
+  assert.deepEqual(usageTotals(snapshots, '2026-10-08', ['aws']).map(row => [row.currency, row.actual, row.estimatedMonthly]), [['USD', 15, 50]])
+  assert.deepEqual(usageTotals(snapshots, '2026-10-08', []), [])
+  assert.deepEqual(trackedSpendingTotals([{ currency: 'USD', monthly: 20, yearly: 240 }, { currency: 'EUR', monthly: 8, yearly: 96 }], usage, ['aws', 'cloudflare'], snapshots), [
+    { currency: 'EUR', fixedMonthly: 8, fixedYearly: 96, meteredActual: null, meteredForecast: null, meteredYearlyForecast: null, combinedMonthlyEstimate: null },
+    { currency: 'USD', fixedMonthly: 20, fixedYearly: 240, meteredActual: 20, meteredForecast: 60, meteredYearlyForecast: 720, combinedMonthlyEstimate: 80 },
+  ])
+  assert.equal(trackedSpendingTotals([], usage, ['aws', 'cloudflare'], snapshots.filter(row => row.provider !== 'cloudflare' || row.kind !== 'forecast'))[0]?.combinedMonthlyEstimate, null)
 })
 
 test('snapshot validation rejects invalid dates, amounts, currency and discriminators', () => {

@@ -28,7 +28,12 @@ export async function readHostingerDiscovery(): Promise<HostingerDiscovery> {
   if (!value || typeof value !== 'object' || !('subscriptions' in value) || !Array.isArray(value.subscriptions) || !('sync' in value)) throw new HostingerApiError('Hostinger discovery returned invalid data. Reload before making changes.')
   return value as HostingerDiscovery
 }
-export async function syncHostinger(): Promise<HostingerDiscovery> { await request('/api/hostinger/subscriptions/sync', 'POST', {}); return readHostingerDiscovery() }
+let activeSync: Promise<HostingerDiscovery> | undefined
+export async function syncHostinger(): Promise<HostingerDiscovery> {
+  if (activeSync) return activeSync
+  activeSync = (async () => { await request('/api/hostinger/subscriptions/sync', 'POST', {}); return readHostingerDiscovery() })().finally(() => { activeSync = undefined })
+  return activeSync
+}
 export async function addHostingerSubscription(externalId: string): Promise<StoredSubscription> { return await request(`/api/hostinger/subscriptions/${encodeURIComponent(externalId)}/entry`, 'POST', {}) as StoredSubscription }
 export async function linkHostingerSubscription(externalId: string, subscription: StoredSubscription, mode: 'keep-current' | 'use-provider'): Promise<StoredSubscription> {
   return await request(`/api/hostinger/subscriptions/${encodeURIComponent(externalId)}/link`, 'POST', { subscriptionId: subscription.id, revision: subscription.revision, mode }) as StoredSubscription

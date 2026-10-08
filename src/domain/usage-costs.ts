@@ -23,6 +23,11 @@ export type UsageTotal = {
   hasForecast: boolean
   estimationComplete: boolean
 }
+export type FixedSpendingTotal = Readonly<{ currency: string; monthly: number; yearly: number }>
+export type TrackedSpendingTotal = Readonly<{
+  currency: string; fixedMonthly: number; fixedYearly: number; meteredActual: number | null
+  meteredForecast: number | null; meteredYearlyForecast: number | null; combinedMonthlyEstimate: number | null
+}>
 
 function validDate(value: string): boolean {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000-')) return false
@@ -79,9 +84,9 @@ export function latestCostSnapshots(snapshots: readonly CostSnapshot[]): CostSna
 }
 
 /** Actuals and whole-month forecasts occupy separate totals. Forecasts already include actuals. No FX conversion. */
-export function usageTotals(snapshots: readonly CostSnapshot[], asOf: string): UsageTotal[] {
+export function usageTotals(snapshots: readonly CostSnapshot[], asOf: string, connectedProviders?: readonly CostProvider[]): UsageTotal[] {
   if (!validDate(asOf)) throw new Error('Invalid summary date')
-  const candidates = latestCostSnapshots(snapshots).filter(snapshot => snapshot.metadata?.period === 'current' && snapshot.capturedAt.slice(0, 7) === asOf.slice(0, 7) && snapshot.periodStart <= asOf)
+  const candidates = latestCostSnapshots(snapshots).filter(snapshot => (!connectedProviders || connectedProviders.includes(snapshot.provider)) && snapshot.metadata?.period === 'current' && snapshot.capturedAt.slice(0, 7) === asOf.slice(0, 7) && snapshot.periodStart <= asOf)
   const latestCapture = new Map<string, number>()
   for (const snapshot of candidates) {
     const key = snapshot.provider
@@ -104,4 +109,30 @@ export function usageTotals(snapshots: readonly CostSnapshot[], asOf: string): U
     totals.set(snapshot.currency, total)
   }
   return [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency))
+}
+
+/** Forecasts already include actuals; add only the whole-month forecast to fixed commitments. */
+export function trackedSpendingTotals(
+  fixed: readonly FixedSpendingTotal[],
+  usage: readonly UsageTotal[],
+  configuredProviders: readonly CostProvider[],
+  currentSnapshots: readonly CostSnapshot[],
+): TrackedSpendingTotal[] {
+  const currencies = new Set([...fixed.map(row => row.currency), ...usage.map(row => row.currency)])
+  return [...currencies].sort().map(currency => {
+    const fixedTotal = fixed.find(row => row.currency === currency)
+    const metered = usage.find(row => row.currency === currency)
+    const covered = configuredProviders.length > 0 && configuredProviders.every(provider => currentSnapshots.some(snapshot => snapshot.provider === provider && snapshot.currency === currency && snapshot.kind === 'forecast'))
+    const completeForecast = !!metered?.hasForecast && metered.estimationComplete && covered
+    const meteredForecast = completeForecast ? metered.estimatedMonthly : null
+    return {
+      currency,
+      fixedMonthly: fixedTotal?.monthly ?? 0,
+      fixedYearly: fixedTotal?.yearly ?? 0,
+      meteredActual: metered?.hasActual ? metered.actual : null,
+      meteredForecast,
+      meteredYearlyForecast: completeForecast ? metered.estimatedYearly : null,
+      combinedMonthlyEstimate: meteredForecast === null ? null : normalizeUsageAmount((fixedTotal?.monthly ?? 0) + meteredForecast),
+    }
+  })
 }
