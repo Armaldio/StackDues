@@ -86,7 +86,7 @@ onUnmounted(() => providers.forEach(clear))
     <div class="connection-grid">
       <article v-for="provider in providers" :key="provider" class="connection-card">
         <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ busy === provider && syncState[provider] === 'idle' ? 'Connecting…' : syncState[provider] === 'syncing' ? 'Syncing…' : syncState[provider] === 'failed' ? 'Sync failed' : syncState[provider] === 'synced' ? 'Synced' : statuses ? statuses[provider].configured ? 'Credentials saved' : 'Not configured' : loading ? 'Loading…' : 'Unavailable' }}</span></header>
-        <p v-if="provider === 'aws'">Use an AWS key with read-only Cost Explorer access.</p><p v-else-if="provider === 'cloudflare'">Use a Cloudflare token with account billing read access.</p><p v-else>Hostinger API tokens inherit your account permissions; StackDues only reads the subscription list. Review discovered renewals below the ledger.</p>
+        <p v-if="provider === 'aws'">Use an AWS key with read-only Cost Explorer access.</p><p v-else-if="provider === 'cloudflare'">Use a Cloudflare token with account billing read access.</p><p v-else>Hostinger API tokens inherit your account permissions; StackDues only reads the subscription list. Review discovered renewals in Hostinger subscriptions below.</p>
         <details class="connection-editor"><summary>{{ statuses?.[provider].configured ? 'Replace credentials' : 'Connect account' }}</summary>
           <form autocomplete="off" @submit.prevent="save(provider)"><fieldset :disabled="loading || !!busy || !statuses || !!error">
             <template v-if="provider === 'aws'"><label :for="`${provider}-key`">Access key ID<input :id="`${provider}-key`" v-model="drafts.aws.accessKeyId" type="password" autocomplete="off" required maxlength="256" /></label><label :for="`${provider}-secret`">Secret access key<input :id="`${provider}-secret`" v-model="drafts.aws.secretAccessKey" type="password" autocomplete="off" required maxlength="4096" /></label><label :for="`${provider}-session`">Session token (optional)<input :id="`${provider}-session`" v-model="drafts.aws.sessionToken" type="password" autocomplete="off" maxlength="4096" /></label></template>
@@ -98,6 +98,8 @@ onUnmounted(() => providers.forEach(clear))
         <button v-if="statuses?.[provider].configured" class="text-button delete-button" type="button" :disabled="loading || !!busy || !!error" @click="disconnect(provider)">Disconnect {{ names[provider] }}</button>
         <p v-if="syncState[provider] === 'failed'" class="error-message" role="status">{{ syncError[provider] }}</p>
         <button v-if="syncState[provider] === 'failed'" class="secondary-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Retrying…' : `Retry ${names[provider]} sync` }}</button>
+        <p v-if="syncState[provider] === 'synced'" class="connection-next-step">{{ provider === 'hostinger' ? 'Next: review eligible fixed renewals in Hostinger subscriptions below.' : 'Next: review current charges in Overview and Infrastructure.' }}</p>
+        <p v-else-if="statuses?.[provider].configured" class="connection-next-step">Next: review saved {{ provider === 'hostinger' ? 'renewals' : 'billing data' }} in Overview.</p>
         <p v-if="statuses?.[provider].updatedAt" class="metric-note">Updated {{ new Date(statuses[provider].updatedAt!).toLocaleString() }}</p>
       </article>
     </div>
