@@ -230,5 +230,20 @@ tbody tr:last-child > * { border-bottom: 0; }
 .connection-notice { color: var(--green); font-size: .85rem; margin-bottom: 1rem; }
 .provider-refresh-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
 .refresh-description { margin: -1rem 0 1.25rem; }
+.hostinger-discovery { margin: 1.5rem 0 2.5rem; scroll-margin-top: 2rem; }
+.hostinger-service-list { display: grid; gap: .75rem; }
+.hostinger-service-card { min-width: 0; padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.hostinger-service-card > header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+.hostinger-service-card h3 { margin-bottom: .25rem; }
+.hostinger-service-details { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0; }
+.hostinger-service-details dt { margin-bottom: .2rem; color: var(--muted); font-size: .72rem; }
+.hostinger-service-details dd { overflow-wrap: anywhere; font-size: .85rem; font-weight: 600; }
+.hostinger-service-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .75rem; }
+.hostinger-service-actions details { min-width: min(100%, 24rem); }
+.hostinger-service-actions summary { padding: .55rem 0; cursor: pointer; font-size: .85rem; font-weight: 600; }
+.hostinger-service-actions label { display: block; margin: .65rem 0; font-size: .8rem; }
+.hostinger-service-actions select { display: block; width: 100%; margin-top: .3rem; padding: .6rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--ink); }
+.hostinger-service-actions .hostinger-mode { display: flex; align-items: flex-start; gap: .5rem; }
+.hostinger-service-actions .hostinger-mode input { margin: .15rem 0 0; }
 @media (max-width: 1100px) { .connection-grid { grid-template-columns: 1fr; } }
-@media (max-width: 650px) { nav { flex-wrap: wrap; justify-content: flex-start; gap: .25rem .65rem; } }
+@media (max-width: 650px) { nav { flex-wrap: wrap; justify-content: flex-start; gap: .25rem .65rem; } .hostinger-service-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -3,17 +3,21 @@
 import nitro from '../.output/server/index.mjs'
 import { authGate, type AuthBindings } from './auth-gate.ts'
 import { syncCosts } from '../server/worker-sync.ts'
+import { refreshHostingerEntries } from '../server/data/hostinger.ts'
 
 type WorkerBindings = AuthBindings & { CREDENTIALS_KEY?: string }
 
 export default {
   scheduled(controller: ScheduledController, env: WorkerBindings, context: ExecutionContext): void {
-    context.waitUntil(syncCosts(env, new Date(controller.scheduledTime)))
+    context.waitUntil(Promise.allSettled([
+      syncCosts(env, new Date(controller.scheduledTime)),
+      refreshHostingerEntries(env.DB, env.CREDENTIALS_KEY, new Date(controller.scheduledTime)),
+    ]))
   },
   async fetch(request: Request, env: WorkerBindings, context: ExecutionContext): Promise<Response> {
     const authResponse = await authGate(request, env)
     if (authResponse) return authResponse
-    if (request.method === 'POST' && new URL(request.url).pathname === '/api/costs/refresh') {
+    if (request.method === 'POST' && ['/api/costs/refresh', '/api/hostinger/subscriptions/sync'].includes(new URL(request.url).pathname)) {
       const limit = await env.COST_REFRESH_RATE_LIMIT.limit({ key: 'owner-cost-refresh' })
       if (!limit.success) return new Response('Please wait before refreshing providers again.', { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } })
     }

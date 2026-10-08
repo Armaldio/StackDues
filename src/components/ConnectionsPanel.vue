@@ -30,7 +30,7 @@ async function save(provider: ConnectionProvider) {
   try {
     const credentials = provider === 'aws' ? { accessKeyId: drafts.aws.accessKeyId.trim(), secretAccessKey: drafts.aws.secretAccessKey.trim(), ...(drafts.aws.sessionToken?.trim() ? { sessionToken: drafts.aws.sessionToken.trim() } : {}) } : provider === 'cloudflare' ? { accountId: drafts.cloudflare.accountId.trim(), apiToken: drafts.cloudflare.apiToken.trim() } : { apiToken: drafts.hostinger.apiToken.trim() }
     statuses.value[provider] = await saveConnection(provider, credentials, statuses.value[provider].revision)
-    notice.value = `${names[provider]} connection saved. ${provider === 'hostinger' ? 'Resource discovery is not available yet.' : 'Use Refresh providers to collect usage costs.'}`
+    notice.value = `${names[provider]} connection saved. ${provider === 'hostinger' ? 'Sync Hostinger subscriptions below to review renewals.' : 'Use Refresh providers to collect usage costs.'}`
     emit('changed')
   } catch (cause) { fail(cause) }
   finally { clear(provider); busy.value = undefined }
@@ -54,7 +54,7 @@ onUnmounted(() => providers.forEach(clear))
     <div class="connection-grid">
       <article v-for="provider in providers" :key="provider" class="connection-card">
         <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ statuses ? statuses[provider].configured ? 'Credentials saved' : 'Not configured' : loading ? 'Loading…' : 'Unavailable' }}</span></header>
-        <p v-if="provider === 'aws'">Use an AWS key with read-only Cost Explorer access.</p><p v-else-if="provider === 'cloudflare'">Use a Cloudflare token with account billing read access.</p><p v-else>Save a Hostinger API token. Resource discovery is not available yet.</p>
+        <p v-if="provider === 'aws'">Use an AWS key with read-only Cost Explorer access.</p><p v-else-if="provider === 'cloudflare'">Use a Cloudflare token with account billing read access.</p><p v-else>Hostinger API tokens inherit your account permissions; StackDues only reads the subscription list. Review discovered renewals below the ledger.</p>
         <details class="connection-editor"><summary>{{ statuses?.[provider].configured ? 'Replace credentials' : 'Connect account' }}</summary>
           <form autocomplete="off" @submit.prevent="save(provider)"><fieldset :disabled="loading || !!busy || !statuses || !!error">
             <template v-if="provider === 'aws'"><label :for="`${provider}-key`">Access key ID<input :id="`${provider}-key`" v-model="drafts.aws.accessKeyId" type="password" autocomplete="off" required maxlength="256" /></label><label :for="`${provider}-secret`">Secret access key<input :id="`${provider}-secret`" v-model="drafts.aws.secretAccessKey" type="password" autocomplete="off" required maxlength="4096" /></label><label :for="`${provider}-session`">Session token (optional)<input :id="`${provider}-session`" v-model="drafts.aws.sessionToken" type="password" autocomplete="off" maxlength="4096" /></label></template>
