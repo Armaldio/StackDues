@@ -208,9 +208,10 @@ tbody tr:last-child > * { border-bottom: 0; }
   .section-header { flex-wrap: wrap; }
   .renewals-panel .section-header { flex-wrap: nowrap; }
   .segmented-control button { padding: .35rem .45rem; font-size: .65rem; }
-  .table-tools { width: 100%; }
+  .table-tools { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 130px); width: 100%; }
+  .table-tools button { grid-column: 1 / -1; width: 100%; white-space: normal; }
   .table-tools input { width: 100%; }
-  .table-tools select { max-width: 130px; }
+  .table-tools select { width: 100%; max-width: none; }
   .subscriptions-empty { align-items: flex-start; flex-direction: column; gap: .75rem; }
   .app-footer { align-items: flex-start; }
   .app-footer p { max-width: 220px; text-align: right; }
