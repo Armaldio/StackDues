@@ -56,7 +56,7 @@ test('first run prioritizes provider connections and preserves a keyboard-friend
   await page.goto('./')
   await expect(page).toHaveTitle('StackDues — subscriptions & infrastructure')
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg')
-  await expect(page.locator('.brand')).toHaveAccessibleName('StackDues')
+  await expect(page.getByRole('link', { name: 'StackDues' })).toBeVisible()
   await expect(page.locator('.app-footer')).toContainText('StackDues')
   const connect = page.getByRole('link', { name: 'Connect a provider' })
   const addManually = page.getByRole('button', { name: 'Add manually', exact: true }).first()
@@ -296,6 +296,51 @@ test('connecting Cloudflare shows actual spend prominently when no forecast is a
   await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$8.00')
   await expect(page.locator('#history')).toContainText('Cloudflare')
   expect(syncCalls).toBe(1)
+})
+
+test('cost history defaults to latest observations, filters currencies and periods, and reveals older captures on demand', async ({ page }) => {
+  const capturedAt = new Date().toISOString()
+  const snapshots: Array<{ id: string; provider: string; periodStart: string; periodEnd: string; amount: number; currency: string; kind: string; capturedAt: string; metadata: Record<string, string> }> = Array.from({ length: 31 }, (_, index) => {
+    const month = String(index % 12 + 1).padStart(2, '0')
+    const year = String(2024 + Math.floor(index / 12))
+    return { id: `aws-${index}`, provider: 'aws', periodStart: `${year}-${month}-01`, periodEnd: `${year}-${month}-28`, amount: index + 1, currency: 'USD', kind: 'actual', capturedAt: new Date(Date.UTC(Number(year), Number(month) - 1, 28)).toISOString(), metadata: { period: 'current' } }
+  })
+  snapshots.push(
+    { ...snapshots[0]!, id: 'aws-revised-old', amount: 4, capturedAt: '2026-01-01T10:00:00Z' },
+    { ...snapshots[0]!, id: 'aws-revised-new', amount: 5, capturedAt: '2026-01-02T10:00:00Z' },
+    { id: 'cf-credit-old', provider: 'cloudflare', periodStart: '2026-10-01', periodEnd: '2026-11-01', amount: -3, currency: 'EUR', kind: 'actual', capturedAt: '2026-10-07T10:00:00Z', metadata: { scope: 'billing-period-to-date', reportedThrough: '2026-10-07' } },
+    { id: 'cf-credit-new', provider: 'cloudflare', periodStart: '2026-10-01', periodEnd: '2026-11-01', amount: -2, currency: 'EUR', kind: 'actual', capturedAt: '2026-10-08T10:00:00Z', metadata: { scope: 'billing-period-to-date', reportedThrough: '2026-10-08' } },
+    { id: 'cf-forecast', provider: 'cloudflare', periodStart: '2026-10-01', periodEnd: '2026-11-01', amount: 8, currency: 'EUR', kind: 'forecast', capturedAt, metadata: { scope: 'billing-period-to-date' } },
+  )
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots, providers: { aws: { status: 'synced' }, cloudflare: { status: 'synced' } } } }))
+  await mockLedger(page, [], false)
+  await page.setViewportSize({ width: 320, height: 900 })
+  await page.goto('./#history')
+  const history = page.locator('#history')
+  await expect(history.locator('tbody tr')).toHaveCount(30)
+  await expect(history).toContainText('latest observations')
+  await expect(history).toContainText('These observations are not separate payments')
+  await history.getByRole('combobox', { name: 'Currency' }).selectOption('EUR')
+  await expect(history.locator('tbody tr')).toHaveCount(2)
+  await expect(history).toContainText('Billing period to date · through 2026-10-08')
+  await expect(history.locator('tbody tr').filter({ hasText: 'Actual · to date' })).toContainText(/-EUR\s*2\.00/)
+  await expect(history).toContainText('Forecast · full month, includes actuals')
+  await history.getByRole('combobox', { name: 'Type' }).selectOption('forecast')
+  await expect(history.locator('tbody tr')).toHaveCount(1)
+  await history.getByRole('combobox', { name: 'Type' }).selectOption('actual')
+  await expect(history.locator('tbody tr')).toHaveCount(1)
+  await expect(history.locator('tbody tr').filter({ hasText: 'Actual · to date' })).toContainText(/-EUR\s*2\.00/)
+  await history.getByRole('button', { name: 'Show previous captures' }).click()
+  await expect(history.locator('tbody tr')).toHaveCount(2)
+  await expect(history).toContainText('through 2026-10-07')
+  await history.getByRole('combobox', { name: 'Provider' }).selectOption('aws')
+  await expect(history.getByText('No observations match these filters.')).toBeVisible()
+  await history.getByRole('combobox', { name: 'Currency' }).selectOption('all')
+  await expect(history.locator('tbody tr')).toHaveCount(30)
+  await history.getByRole('button', { name: 'Show more older entries' }).click()
+  await expect(history.locator('tbody tr')).toHaveCount(33)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
 test('connecting Hostinger automatically discovers subscriptions without pressing Sync', async ({ page }) => {
