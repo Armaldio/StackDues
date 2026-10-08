@@ -204,3 +204,14 @@ tbody tr:last-child > * { border-bottom: 0; }
 
 .content-columns.single-column { grid-template-columns: 1fr; }
 .infrastructure-section { margin-bottom: 2.5rem; }
+
+.legacy-import { margin: 1.5rem 0 2.5rem; padding: 1.25rem; border: 1px solid var(--line); border-radius: 4px; }
+.legacy-import summary { cursor: pointer; font-weight: 600; }
+.legacy-import p { margin: .75rem 0; font-size: .85rem; color: var(--muted); overflow-wrap: anywhere; }
+.legacy-import a { color: var(--accent); }
+.legacy-import label { display: block; font-size: .8rem; margin: 1rem 0; }
+.legacy-import input, .legacy-import textarea { display: block; width: 100%; margin-top: .5rem; }
+.legacy-import textarea { padding: .75rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--ink); resize: vertical; font: inherit; }
+.legacy-import ul { max-height: 12rem; overflow: auto; padding-left: 1.25rem; font-size: .8rem; }
+.import-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.storage-error a { margin-left: .75rem; }

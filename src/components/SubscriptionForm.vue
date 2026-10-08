@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { createSubscription, type Subscription } from '../domain/subscriptions'
-const props = defineProps<{ subscription?: Subscription; today: string; saveError?: string | null }>()
+const props = defineProps<{ subscription?: Subscription; today: string; saveError?: string | null; saving?: boolean }>()
 const emit = defineEmits<{ save: [subscription: Subscription]; close: [] }>()
 const dialog = ref<HTMLDialogElement>()
 const error = ref('')
@@ -11,6 +11,7 @@ const draft = reactive<Subscription>(props.subscription ? { ...props.subscriptio
 })
 onMounted(() => dialog.value?.showModal())
 function save() {
+  if (props.saving) return
   try { emit('save', createSubscription({ ...draft, currency: draft.currency.toUpperCase(), provider: draft.provider?.trim() || undefined })) }
   catch (cause) { error.value = cause instanceof Error ? cause.message : 'Check the subscription details.' }
 }
@@ -29,7 +30,7 @@ function save() {
       <p class="form-note">Pausing or cancelling removes future charges from your totals. This only updates your ledger; it does not cancel the service.</p>
       <p v-if="error" class="error-message" role="alert">{{ error }}</p>
       <p v-if="saveError" class="error-message" role="alert">{{ saveError }}</p>
-      <div class="dialog-actions"><button type="button" class="secondary-button" @click="emit('close')">Close</button><button class="primary-button" type="submit">Save subscription</button></div>
+      <div class="dialog-actions"><button type="button" class="secondary-button" @click="emit('close')">Close</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? 'Saving…' : 'Save subscription' }}</button></div>
     </form>
   </dialog>
 </template>

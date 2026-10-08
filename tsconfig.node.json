@@ -19,5 +19,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["worker-configuration.d.ts", "worker/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "server/providers/**/*.ts", "server/security/**/*.ts", "server/sync.ts", "playwright.config.ts", "e2e/**/*.ts"]
+  "include": ["worker-configuration.d.ts", "worker/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "server/providers/**/*.ts", "server/data/**/*.ts", "server/security/**/*.ts", "server/sync.ts", "playwright.config.ts", "e2e/**/*.ts"]
 }

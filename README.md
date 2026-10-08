@@ -4,7 +4,7 @@ Personal subscription commitments and metered infrastructure costs. [Plane DUES-
 
 ## Development
 
-Use Node.js 24 and `npm ci`. `npm run dev` starts Nuxt on localhost. The dashboard retains its Vue components and pure domain calculations; client rendering preserves browser-local subscriptions during the migration. Clearing browser storage removes these records, so keep them until the explicit D1 import is available.
+Use Node.js 24 and `npm ci`. `npm run dev` starts Nuxt on localhost. The dashboard retains its Vue components and pure domain calculations; client rendering preserves the existing UI while subscriptions are loaded from the private D1 API. Legacy browser records are never automatically uploaded, overwritten or deleted.
 
 - `npm test`: recurrence, renewal, normalization, local storage, cost parsing, provider failure isolation and password hashing and signed session verification.
 - `npm run build`: Nuxt/Nitro Workers production build.
@@ -18,7 +18,15 @@ Use Node.js 24 and `npm ci`. `npm run dev` starts Nuxt on localhost. The dashboa
 
 Fixed subscriptions and metered observations remain separate domain models. Arbitrary day/week/month/year recurrences retain the original charge; normalized equivalents use 365 days or 12 months per year. Calendar renewals are UTC, anchored to their original day and clamped at month ends without drift. Paused/cancelled entries are excluded. Totals are grouped by currency, with no implied exchange conversion.
 
-Actual provider observations are immutable and timestamped. Whole-month forecasts already include actual costs and are never added to actuals. Missing forecasts prevent misleading combined estimates; failed providers retain their previous observations. The dashboard reads `/api/costs`, with no public billing JSON. During the first migration slice this endpoint returns unconfigured providers; D1 and Workers ingestion follow in their own PRs.
+Actual provider observations are immutable and timestamped. Whole-month forecasts already include actual costs and are never added to actuals. Missing forecasts prevent misleading combined estimates; failed providers retain their previous observations. The dashboard reads `/api/costs`, with no public billing JSON. The endpoint reads immutable D1 observations and sync status; provider ingestion is enabled in the Workers sync slice.
+
+## Private persistence and browser import
+
+D1 keeps manual fixed subscriptions, immutable cost observations, provider sync status and owner credentials in separate tables. CRUD uses prepared statements and row revisions: a stale edit/delete returns 409 instead of overwriting another device. Storage failures appear as errors while the browser keeps the previously displayed data; they never become a successful empty ledger. Server transactions enforce finite per-currency fixed totals.
+
+Use **Import an existing browser ledger** to select a JSON file, paste JSON, or read same-origin legacy data. Preview and validate the entire array, download its exact original backup, then explicitly import. Imports are limited to 1 MiB/1,000 records, idempotent by subscription ID, atomic, and never overwrite existing server edits. The interface displays verified account values for comparison. Original LocalStorage keys remain untouched. The former Pages data belongs to `https://armaldio.github.io`, so the new hostname cannot read it; visit the previous Pages address (a 404 does not remove browser storage) and export `ledger.subscriptions.v1` from Developer Tools → Application/Storage → Local Storage.
+
+Apply the focused migrations with `npx wrangler d1 migrations apply stackdues --remote` before deploying. Cost inserts and status updates commit together, duplicate observations cannot change values, errors preserve the last success, and older attempts cannot regress status. `npm run test:d1` proves these paths with a temporary local D1 database; authenticated API routing is tested separately against the full Worker.
 
 ## Workers and login
 

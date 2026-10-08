@@ -42,6 +42,50 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.match(await dashboard.text(), /StackDues/)
     assert.equal((await request('/favicon.svg', { headers: { Cookie: cookie } })).status, 200)
     assert.equal((await request('/api/costs', { headers: { Cookie: cookie } })).status, 200)
+    const item = { id: 'api-bitwarden', name: 'Bitwarden', billingType: 'fixed', amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-10-08', status: 'active' }
+    const jsonRequest = (path: string, method: string, value: unknown) => request(path, { method, headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) })
+    const created = await jsonRequest('/api/subscriptions', 'POST', item)
+    assert.equal(created.status, 200, await created.clone().text())
+    assert.equal((await created.json() as { revision: number }).revision, 1)
+    const edited = await jsonRequest('/api/subscriptions/api-bitwarden', 'PATCH', { subscription: { ...item, amount: 20 }, revision: 1 })
+    assert.equal(edited.status, 200, await edited.clone().text())
+    assert.equal((await jsonRequest('/api/subscriptions/api-bitwarden', 'PATCH', { subscription: item, revision: 1 })).status, 409)
+    const imported = await jsonRequest('/api/subscriptions/import', 'POST', { subscriptions: [item, { ...item, id: 'api-vps', name: 'VPS' }] })
+    assert.equal(imported.status, 200, await imported.clone().text())
+    const importedResult = await imported.json() as { createdIds: string[], subscriptions: { id: string, amount: number }[] }
+    assert.deepEqual(importedResult.createdIds, ['api-vps'])
+    assert.equal(importedResult.subscriptions.find(row => row.id === item.id)!.amount, 20)
+    const ledger = await request('/api/subscriptions', { headers: { Cookie: cookie } })
+    assert.equal((await ledger.json() as unknown[]).length, 2)
+    assert.match(ledger.headers.get('cache-control')!, /private, no-store/)
+    const deleteRequest = (id: string, revision: number) => request(`/api/subscriptions/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { Cookie: cookie, Origin: base, 'If-Match': `"${revision}"` },
+    })
+    // Nitro's Cloudflare adapter forwards POST/PATCH bodies, but not DELETE.
+    // Revisions travel in If-Match so the deployed runtime can enforce conflicts.
+    assert.equal((await deleteRequest(item.id, 1)).status, 409)
+    const deleted = await deleteRequest(item.id, 2)
+    assert.equal(deleted.status, 200, await deleted.clone().text())
+    assert.deepEqual(await deleted.json(), { deleted: true })
+    for (const id of ['legacy/aws', 'legacy%25item']) {
+      const escaped = { ...item, id, name: 'Imported escaped ID' }
+      const added = await jsonRequest('/api/subscriptions', 'POST', escaped)
+      assert.equal(added.status, 200, await added.clone().text())
+      const changed = await jsonRequest(`/api/subscriptions/${encodeURIComponent(id)}`, 'PATCH', {
+        subscription: { ...escaped, amount: 30 }, revision: 1,
+      })
+      assert.equal(changed.status, 200, await changed.clone().text())
+      assert.equal((await changed.json() as { id: string }).id, id)
+      assert.equal((await deleteRequest(id, 1)).status, 409)
+      const removed = await deleteRequest(id, 2)
+      assert.equal(removed.status, 200, await removed.clone().text())
+      assert.deepEqual(await removed.json(), { deleted: true })
+    }
+    const remaining = await request('/api/subscriptions', { headers: { Cookie: cookie } })
+    assert.deepEqual((await remaining.json() as { id: string }[]).map(row => row.id), ['api-vps'])
+    const oversized = await jsonRequest('/api/subscriptions/import', 'POST', { oversized: 'x'.repeat(1024 * 1024) })
+    assert.equal(oversized.status, 413)
+
     assert.equal((await request('/api/costs', { headers: { Cookie: '__Host-stackdues_session=forged' } })).status, 401)
     const repeated = await post('/auth/register', { ...fields, password: 'another-local-test-password' })
     assert.equal(repeated.headers.get('set-cookie'), null)
