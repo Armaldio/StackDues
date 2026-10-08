@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import SubscriptionForm from './components/SubscriptionForm.vue'
 import InfrastructurePanel from './components/InfrastructurePanel.vue'
+import ConnectionsPanel from './components/ConnectionsPanel.vue'
 import CostHistory from './components/CostHistory.vue'
 import LegacyImport from './components/LegacyImport.vue'
 import { emptyCostFeed } from './lib/cost-feed'
@@ -9,6 +10,7 @@ import { createSubscription, nextRenewalOnOrAfter, normalizeCost, normalizedTota
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
+const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
 const subscriptions = ref<StoredSubscription[]>([])
 const storageError = ref<string | null>(null)
 const loading = ref(true)
@@ -107,7 +109,7 @@ async function loadExamples() {
     <aside class="sidebar" aria-label="Primary navigation">
       <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">L</span>ledger<span class="brand-period">.</span></a>
       <p class="workspace-label">Personal workspace</p>
-      <nav><a href="#overview" class="nav-active"><span aria-hidden="true">◫</span> Overview</a><a href="#subscriptions"><span aria-hidden="true">≡</span> Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#infrastructure"><span aria-hidden="true">▤</span> Infrastructure</a><a href="#history"><span aria-hidden="true">↻</span> History</a></nav>
+      <nav><a href="#overview" class="nav-active"><span aria-hidden="true">◫</span> Overview</a><a href="#subscriptions"><span aria-hidden="true">≡</span> Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#infrastructure"><span aria-hidden="true">▤</span> Infrastructure</a><a href="#connections"><span aria-hidden="true">⌁</span> Connections</a><a href="#history"><span aria-hidden="true">↻</span> History</a></nav>
       <div class="sidebar-note"><span class="local-indicator" aria-hidden="true"></span><strong>Your private ledger</strong><p>Fixed subscriptions are saved to your account and available across devices.</p></div>
     </aside>
     <main id="overview" tabindex="-1">
@@ -133,7 +135,8 @@ async function loadExamples() {
         <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in ledger`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
       <LegacyImport :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
-      <InfrastructurePanel :fixed-totals="totals" :today="today" @loaded="costFeed = $event" />
+      <ConnectionsPanel @changed="infrastructure?.reload()" />
+      <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :today="today" @loaded="costFeed = $event" />
       <CostHistory :snapshots="costFeed.snapshots" />
       <footer class="app-footer"><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved privately to your account. Imported browser ledgers remain untouched.</p></footer>
     </main>

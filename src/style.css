@@ -215,3 +215,20 @@ tbody tr:last-child > * { border-bottom: 0; }
 .legacy-import ul { max-height: 12rem; overflow: auto; padding-left: 1.25rem; font-size: .8rem; }
 .import-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
 .storage-error a { margin-left: .75rem; }
+
+.connections-section { margin-bottom: 2.5rem; scroll-margin-top: 2rem; }
+.connection-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.connection-card { padding: 1.25rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); min-width: 0; }
+.connection-card header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; }
+.connection-card h3 { font-size: 1rem; }
+.connection-card > p { margin: .75rem 0; font-size: .8rem; color: var(--muted); }
+.connection-editor summary { cursor: pointer; font-weight: 600; font-size: .85rem; margin: 1rem 0; }
+.connection-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.connection-editor label { display: block; font-size: .8rem; margin: .75rem 0; }
+.connection-editor input { display: block; width: 100%; margin-top: .35rem; padding: .6rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--ink); }
+.connection-editor .primary-button { width: 100%; font-size: .8rem; padding: .65rem; }
+.connection-notice { color: var(--green); font-size: .85rem; margin-bottom: 1rem; }
+.provider-refresh-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.refresh-description { margin: -1rem 0 1.25rem; }
+@media (max-width: 1100px) { .connection-grid { grid-template-columns: 1fr; } }
+@media (max-width: 650px) { nav { flex-wrap: wrap; justify-content: flex-start; gap: .25rem .65rem; } }

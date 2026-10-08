@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { createCostSnapshot, type CostSnapshot } from '../../src/domain/usage-costs.ts'
 
 type CloudflareOptions = {
@@ -99,7 +98,7 @@ export async function collectCloudflareCosts(options: CloudflareOptions): Promis
     groups.set(key, group)
   }
   return [...groups.values()].map((group) => createCostSnapshot({
-    id: randomUUID(), provider: 'cloudflare', periodStart: group.periodStart, periodEnd: group.periodEnd,
+    id: `cloudflare:actual:${group.periodStart}:${group.periodEnd}:${group.currency}:${now.toISOString()}`, provider: 'cloudflare', periodStart: group.periodStart, periodEnd: group.periodEnd,
     amount: group.amount, currency: group.currency, kind: 'actual', capturedAt: now.toISOString(),
     metadata: {
       period: 'current', scope: 'billing-period-to-date', reportedThrough: group.reportedThrough,

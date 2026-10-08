@@ -39,6 +39,7 @@ export async function refreshCosts(
     if (!connector.configured) {
       providers[connector.provider] = {
         status: 'not-configured',
+        lastAttemptAt: attemptedAt,
         ...(previous.providers[connector.provider].lastSyncedAt ? { lastSyncedAt: previous.providers[connector.provider].lastSyncedAt } : {}),
       }
     } else if (result.status === 'fulfilled') {

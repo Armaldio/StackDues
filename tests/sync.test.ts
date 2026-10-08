@@ -48,7 +48,8 @@ test('unconfigured providers do not request credentials or fabricate zero usage'
   assert.equal(state.providers.aws.status, 'not-configured')
   assert.equal(state.providers.cloudflare.status, 'not-configured')
   assert.equal(state.providers.aws.lastSyncedAt, undefined)
-  assert.equal(state.providers.aws.lastAttemptAt, undefined)
+  assert.equal(state.providers.aws.lastAttemptAt, now.toISOString())
+  assert.equal(state.providers.cloudflare.lastAttemptAt, now.toISOString())
 })
 
 test('malformed or wrong-provider results fail atomically and preserve historical snapshots', async () => {

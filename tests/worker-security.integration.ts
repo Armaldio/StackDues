@@ -12,7 +12,7 @@ test('Worker protects app/assets/API and supports single-owner registration, log
   delete config.routes; delete config.account_id
   config.main = resolve('worker/index.ts'); config.assets.directory = resolve('.output/public')
   config.d1_databases[0].migrations_dir = resolve('migrations')
-  config.vars = { OWNER_EMAIL: 'owner@example.com', SESSION_SECRET: 'a'.repeat(64), SETUP_TOKEN: 'local-test-setup-code' }
+  config.vars = { OWNER_EMAIL: 'owner@example.com', SESSION_SECRET: 'a'.repeat(64), SETUP_TOKEN: 'local-test-setup-code', CREDENTIALS_KEY: 'b'.repeat(64) }
   const configPath = join(directory, 'wrangler.jsonc'), statePath = join(directory, 'state')
   await writeFile(configPath, JSON.stringify(config))
   execFileSync('node', ['node_modules/wrangler/bin/wrangler.js', 'd1', 'migrations', 'apply', 'stackdues', '--local', '--config', configPath, '--persist-to', statePath], { env: { ...process.env, WRANGLER_SEND_METRICS: 'false' }, stdio: 'pipe' })
@@ -26,7 +26,7 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     const deadline = Date.now() + 40_000
     while (!output.includes('Ready on')) { if (worker.exitCode !== null || Date.now() > deadline) throw new Error(`Worker startup failed: ${output}`); await new Promise(resolve => setTimeout(resolve, 100)) }
     assert.equal((await request('/')).status, 303)
-    for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
+    for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
     assert.match(await (await request('/register')).text(), /One-time setup code/)
     assert.equal((await post('/auth/register', {}, 'https://foreign.example')).status, 403)
     const fields = { email: 'owner@example.com', password: 'a-safe-local-test-password', code: 'local-test-setup-code' }
@@ -44,6 +44,28 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.equal((await request('/api/costs', { headers: { Cookie: cookie } })).status, 200)
     const item = { id: 'api-bitwarden', name: 'Bitwarden', billingType: 'fixed', amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-10-08', status: 'active' }
     const jsonRequest = (path: string, method: string, value: unknown) => request(path, { method, headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) })
+    const connection = { credentials: { apiToken: 'test-hostinger-secret-never-return' }, revision: 0 }
+    assert.equal((await request('/api/connections/hostinger', { method: 'PUT', headers: { Cookie: cookie, Origin: 'https://foreign.example', 'Content-Type': 'application/json' }, body: JSON.stringify(connection) })).status, 403)
+    const connected = await jsonRequest('/api/connections/hostinger', 'PUT', connection)
+    assert.equal(connected.status, 200, await connected.clone().text())
+    assert.equal((await connected.text()).includes(connection.credentials.apiToken), false)
+    const connectionStatus = await request('/api/connections', { headers: { Cookie: cookie } })
+    assert.equal((await connectionStatus.clone().text()).includes(connection.credentials.apiToken), false)
+    assert.equal((await connectionStatus.json() as { hostinger: { configured: boolean } }).hostinger.configured, true)
+    assert.equal((await jsonRequest('/api/connections/hostinger', 'PUT', connection)).status, 409)
+    const disconnected = await request('/api/connections/hostinger', { method: 'DELETE', headers: { Cookie: cookie, Origin: base, 'If-Match': '"1"' } })
+    assert.equal(disconnected.status, 200, await disconnected.clone().text())
+    const refreshed = await jsonRequest('/api/costs/refresh', 'POST', {})
+    assert.equal(refreshed.status, 200, await refreshed.clone().text())
+    const refreshedFeed = await refreshed.json() as { providers: { aws: { status: string }, cloudflare: { status: string } } }
+    assert.equal(refreshedFeed.providers.aws.status, 'not-configured')
+    assert.equal(refreshedFeed.providers.cloudflare.status, 'not-configured')
+    const scheduled = await request('/cdn-cgi/local/scheduled?cron=17+*%2F6+*+*+*')
+    assert.equal(scheduled.status, 200, await scheduled.clone().text())
+    const scheduledFeed = await request('/api/costs', { headers: { Cookie: cookie } })
+    const scheduledProviders = (await scheduledFeed.json() as { providers: { aws: { status: string; lastAttemptAt?: string } } }).providers
+    assert.equal(scheduledProviders.aws.status, 'not-configured')
+    assert.ok(scheduledProviders.aws.lastAttemptAt)
     const created = await jsonRequest('/api/subscriptions', 'POST', item)
     assert.equal(created.status, 200, await created.clone().text())
     assert.equal((await created.json() as { revision: number }).revision, 1)

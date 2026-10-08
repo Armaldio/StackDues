@@ -2,13 +2,18 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { latestCostSnapshots, usageTotals, type CostBreakdown, type CostProvider } from '../domain/usage-costs'
 import type { CurrencyTotal } from '../domain/subscriptions'
-import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, type CostFeed } from '../lib/cost-feed'
+import { currentCostSnapshots, emptyCostFeed, parseCostFeed, isProviderStale, type CostFeed } from '../lib/cost-feed'
+
+import { ConnectionApiError, refreshProviders } from '../lib/connection-api'
 
 const props = defineProps<{ fixedTotals: CurrencyTotal[]; today: string }>()
 const emit = defineEmits<{ loaded: [feed: CostFeed] }>()
 const feed = ref(emptyCostFeed())
 const loading = ref(false)
 const error = ref('')
+const refreshing = ref(false)
+const refreshError = ref('')
+const expired = ref(false)
 const providers: CostProvider[] = ['aws', 'cloudflare']
 const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
 const totals = computed(() => usageTotals(activeSnapshots.value, props.today))
@@ -34,20 +39,34 @@ function breakdown(value: unknown): readonly CostBreakdown[] { return Array.isAr
 async function reload() {
   if (loading.value) return
   loading.value = true
-  try { feed.value = await fetchCostFeed('/api/costs'); error.value = ''; emit('loaded', feed.value) }
-  catch { error.value = 'Infrastructure data could not be loaded. Previous observations are still displayed. Try again.' }
+  try {
+    const response = await fetch('/api/costs', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15_000) })
+    if (response.status === 401) throw new ConnectionApiError('Your session expired. Sign in again, then reload.', 401)
+    if (!response.ok) throw new Error('Cost data unavailable')
+    feed.value = parseCostFeed(await response.json()); error.value = ''; expired.value = false; emit('loaded', feed.value)
+  }
+  catch (cause) { expired.value = cause instanceof ConnectionApiError && cause.status === 401; error.value = expired.value ? 'Your session expired. Sign in again, then reload.' : 'Infrastructure data could not be loaded. Previous observations are still displayed. Try again.' }
   finally { loading.value = false }
 }
+async function refresh() {
+  if (refreshing.value || loading.value) return
+  refreshing.value = true; refreshError.value = ''
+  try { await refreshProviders(); await reload() }
+  catch (cause) { refreshError.value = cause instanceof Error ? cause.message : 'Provider refresh failed. Previous observations are retained.'; expired.value = cause instanceof ConnectionApiError && cause.status === 401 }
+  finally { refreshing.value = false }
+}
+defineExpose({ reload })
 let timer: ReturnType<typeof setInterval> | undefined
-onMounted(() => { void reload(); timer = setInterval(() => { void reload() }, 15 * 60 * 1000) })
+onMounted(() => { void reload(); timer = setInterval(() => { if (!refreshing.value) void reload() }, 15 * 60 * 1000) })
 onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
 </script>
 
 <template>
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
-    <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><button type="button" class="secondary-button" :disabled="loading" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button></div>
+    <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><div class="provider-refresh-actions"><button type="button" class="secondary-button" :disabled="loading || refreshing" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button><button type="button" class="primary-button" :disabled="loading || refreshing" @click="refresh">{{ refreshing ? 'Refreshing…' : 'Refresh providers' }}</button></div></div>
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
-    <p v-if="error" role="alert" class="feed-warning">{{ error }}</p>
+    <p class="metric-note refresh-description">Refresh providers fetches new usage from connected AWS and Cloudflare accounts. Reload cost data reads the stored observations.</p>
+    <p v-if="error" role="alert" class="feed-warning">{{ error }}</p><p v-if="refreshError" role="alert" class="feed-warning">{{ refreshError }}</p><p v-if="expired"><a href="/login">Sign in</a></p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
         <p class="eyebrow">{{ total.currency }} · current reported period</p><strong>{{ total.hasActual ? money(total.actual, total.currency) : 'Unavailable' }}</strong><span>Actual metered spend</span>
@@ -79,7 +98,7 @@ onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
         <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>
-    <details class="provider-setup"><summary>Provider connections</summary><p>This workspace is protected by your email/password login. Provider credentials belong only in Workers Secrets; never enter keys in this dashboard.</p><p>Provider refresh is being migrated to Workers. Reload cost data reads existing observations. See the <a href="https://github.com/Armaldio/StackDues#workers-and-login">private workspace setup guide</a>.</p></details>
+    <p class="provider-setup">Manage private credentials in <a href="#connections">Connections</a>. Provider refresh failures keep previous observations and history.</p>
   </section>
 </template>
 
