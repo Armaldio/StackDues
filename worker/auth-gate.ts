@@ -39,10 +39,11 @@ export async function authGate(request: Request, env: AuthBindings): Promise<Res
   if (mutation && !sameOrigin(request)) return deny(403)
   try {
     if (!env.DB || !env.SESSION_SECRET || !env.OWNER_EMAIL) return deny(503)
+    const isAuthPost = request.method === 'POST' && (path === '/auth/login' || path === '/auth/register')
+    if (isAuthPost && (!env.LOGIN_RATE_LIMIT || !(await env.LOGIN_RATE_LIMIT.limit({ key: request.headers.get('CF-Connecting-IP') ?? 'local' })).success)) return new Response('Too many attempts. Try again in a minute.', { status: 429, headers: { ...privateHeaders, 'Retry-After': '60' } })
     const owner = await env.DB.prepare('SELECT email, password_hash FROM owner_credentials WHERE singleton = 1').first<Owner>()
     const config = { ownerEmail: owner?.email, passwordHash: owner?.password_hash, sessionSecret: env.SESSION_SECRET }
-    if (request.method === 'POST' && (path === '/auth/login' || path === '/auth/register')) {
-      if (!env.LOGIN_RATE_LIMIT || !(await env.LOGIN_RATE_LIMIT.limit({ key: request.headers.get('CF-Connecting-IP') ?? 'local' })).success) return new Response('Too many attempts. Try again in a minute.', { status: 429, headers: { ...privateHeaders, 'Retry-After': '60' } })
+    if (isAuthPost) {
       const form = await readForm(request)
       const email = form.get('email')?.trim().toLowerCase() ?? ''
       const password = form.get('password') ?? ''

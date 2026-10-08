@@ -40,6 +40,14 @@ test('manual refresh makes authenticated POST and accepts empty success response
   t.mock.method(globalThis, 'fetch', async (url: unknown, options?: RequestInit) => { assert.equal(url, '/api/costs/refresh'); assert.equal(options?.method, 'POST'); assert.equal(options?.credentials, 'same-origin'); return new Response(null, { status: 204 }) })
   await refreshProviders()
 })
+test('provider refresh reports failure when the feed records an unsuccessful collection', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ providers: { aws: { status: 'error' } } }))
+  await assert.rejects(refreshProviders('aws'), /provider refresh did not complete/i)
+})
+test('provider refresh requires a confirmed synced status in its feed', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ providers: { cloudflare: { status: 'synced' } } }))
+  await assert.rejects(refreshProviders('aws'), /provider refresh did not complete/i)
+})
 test('provider-specific refresh is scoped and duplicate in-flight requests coalesce', async t => {
   let calls = 0
   t.mock.method(globalThis, 'fetch', async (url: unknown, options?: RequestInit) => {
@@ -47,7 +55,7 @@ test('provider-specific refresh is scoped and duplicate in-flight requests coale
     assert.equal(url, '/api/costs/refresh?provider=cloudflare')
     assert.equal(options?.method, 'POST')
     await new Promise(resolve => setTimeout(resolve, 20))
-    return new Response(null, { status: 204 })
+    return Response.json({ providers: { cloudflare: { status: 'synced' } } })
   })
   await Promise.all([refreshProviders('cloudflare'), refreshProviders('cloudflare')])
   assert.equal(calls, 1)

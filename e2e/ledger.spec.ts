@@ -242,7 +242,7 @@ test('connections keep secrets request-only, preserve revisions, and automatical
     }
     return route.fulfill({ json: { configured, revision } })
   })
-  await page.route('**/api/costs/refresh*', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; return route.fulfill({ status: 204 }) })
+  await page.route('**/api/costs/refresh*', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
   await page.goto('./')
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
   await expect(card.getByText('Not configured', { exact: true })).toBeVisible()
@@ -285,7 +285,7 @@ test('connecting AWS automatically updates Overview, Infrastructure and History 
     { id: 'aws-actual', provider: 'aws', periodStart: start, periodEnd: endDate, amount: 3, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
     { id: 'aws-forecast', provider: 'aws', periodStart: start, periodEnd: endDate, amount: 10, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
   ] : [], providers: { aws: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
-  await page.route('**/api/costs/refresh*', async route => { expect(new URL(route.request().url()).searchParams.get('provider')).toBe('aws'); synced = true; return route.fulfill({ status: 204 }) })
+  await page.route('**/api/costs/refresh*', async route => { expect(new URL(route.request().url()).searchParams.get('provider')).toBe('aws'); synced = true; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
   await page.goto('./')
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
   await card.locator('summary').click()
@@ -320,7 +320,7 @@ test('connecting Cloudflare shows actual spend prominently when no forecast is a
   await page.route('**/api/costs/refresh*', async route => {
     expect(new URL(route.request().url()).searchParams.get('provider')).toBe('cloudflare')
     syncCalls++; synced = true
-    return route.fulfill({ status: 204 })
+    return route.fulfill({ json: { providers: { cloudflare: { status: 'synced' } } } })
   })
   await page.goto('./')
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Cloudflare', exact: true }) })

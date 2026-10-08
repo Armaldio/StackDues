@@ -27,6 +27,12 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     while (!output.includes('Ready on')) { if (worker.exitCode !== null || Date.now() > deadline) throw new Error(`Worker startup failed: ${output}`); await new Promise(resolve => setTimeout(resolve, 100)) }
     assert.equal((await request('/')).status, 303)
     for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
+    for (const [method, path] of [
+      ['POST', '/api/subscriptions?import=1'],
+      ['PATCH', '/api/subscriptions/bitwarden?revision=1'],
+      ['DELETE', '/api/subscriptions/bitwarden?revision=1'],
+      ['POST', '/api/connections/aws?replace=1'],
+    ]) assert.equal((await request(path, { method, headers: { Origin: base } })).status, 401, `${method} ${path}`)
     assert.match(await (await request('/register')).text(), /One-time setup code/)
     assert.equal((await post('/auth/register', {}, 'https://foreign.example')).status, 403)
     const opaqueOriginPost = (fields: Record<string, string>, site: string) => request('/auth/register', { method: 'POST', headers: { Origin: 'null', 'Sec-Fetch-Site': site, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields) })
