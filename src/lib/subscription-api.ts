@@ -4,7 +4,7 @@ export type StoredSubscription = Subscription & { revision: number }
 export type ImportResult = { subscriptions: StoredSubscription[]; createdIds: string[] }
 
 export function parseStoredSubscriptions(value: unknown): StoredSubscription[] {
-  if (!Array.isArray(value)) throw new Error('The server returned an invalid ledger. Reload before making changes.')
+  if (!Array.isArray(value)) throw new Error('The server returned invalid subscription data. Reload before making changes.')
   const records = value.map((record: unknown) => {
     if (!record || typeof record !== 'object' || !('revision' in record) || !Number.isSafeInteger(record.revision) || (record.revision as number) < 1) {
       throw new Error('The server returned an invalid subscription revision. Reload before making changes.')
@@ -24,10 +24,10 @@ async function request(path = '', method = 'GET', body?: unknown, headers: Recor
       headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-  } catch { throw new Error('The ledger server could not be reached. Your displayed records have been kept. Reload before making changes.') }
+  } catch { throw new Error('Subscription storage could not be reached. Your displayed records have been kept. Reload before making changes.') }
   if (!response.ok) {
-    if (response.status === 401) throw new Error('Your session expired. Sign in again, then reload the ledger. Changes were not saved.')
-    if (response.status === 409) throw new Error('This subscription changed on another device. Reload the ledger before editing again. Your changes did not overwrite it.')
+    if (response.status === 401) throw new Error('Your session expired. Sign in again, then reload subscriptions. Changes were not saved.')
+    if (response.status === 409) throw new Error('This subscription changed on another device. Reload subscriptions before editing again. Your changes did not overwrite it.')
     throw new Error('The ledger request failed. Your displayed records have been kept. Reload before making changes.')
   }
   try { return await response.json() }
@@ -48,17 +48,17 @@ export async function deleteStoredSubscription(id: string, revision: number): Pr
 export async function importStoredSubscriptions(subscriptions: Subscription[]): Promise<ImportResult> {
   const result = await request('/import', 'POST', { subscriptions: subscriptions.map(createSubscription) })
   if (!result || typeof result !== 'object' || !('subscriptions' in result) || !('createdIds' in result) || !Array.isArray(result.createdIds) || result.createdIds.some(id => typeof id !== 'string')) {
-    throw new Error('Import could not be confirmed. Keep your backup and reload the ledger before making changes.')
+    throw new Error('Import could not be confirmed. Keep your backup and reload subscriptions before making changes.')
   }
   const records = parseStoredSubscriptions(result.subscriptions)
   const ids = new Set(records.map(({ id }) => id))
   const source = new Map(subscriptions.map(record => [record.id, createSubscription(record)]))
   if (subscriptions.some(({ id }) => !ids.has(id)) || result.createdIds.some(id => !ids.has(id) || !source.has(id)) || new Set(result.createdIds).size !== result.createdIds.length) {
-    throw new Error('Import could not be verified. Keep your backup and reload the ledger before making changes.')
+    throw new Error('Import could not be verified. Keep your backup and reload subscriptions before making changes.')
   }
   for (const id of result.createdIds as string[]) {
     const stored = records.find(record => record.id === id)!
-    if (JSON.stringify(createSubscription(stored)) !== JSON.stringify(source.get(id))) throw new Error('An imported record could not be verified. Keep your backup and reload the ledger before making changes.')
+    if (JSON.stringify(createSubscription(stored)) !== JSON.stringify(source.get(id))) throw new Error('An imported record could not be verified. Keep your backup and reload subscriptions before making changes.')
   }
   return { subscriptions: records, createdIds: result.createdIds as string[] }
 }

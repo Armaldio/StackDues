@@ -6,7 +6,7 @@ import ConnectionsPanel from './components/ConnectionsPanel.vue'
 import HostingerDiscovery from './components/HostingerDiscovery.vue'
 import CostHistory from './components/CostHistory.vue'
 import LegacyImport from './components/LegacyImport.vue'
-import { createSubscription, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
+import { nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals } from './domain/usage-costs'
 import type { ConnectionStatuses } from './lib/connection-api'
@@ -18,6 +18,7 @@ const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
 const hostinger = ref<InstanceType<typeof HostingerDiscovery>>()
 const connectionStatuses = ref<ConnectionStatuses>()
 const hostingerState = ref<HostingerState>()
+const currentSection = ref(window.location.hash.slice(1) || 'overview')
 const subscriptions = ref<StoredSubscription[]>([])
 const storageError = ref<string | null>(null)
 const loading = ref(true)
@@ -28,20 +29,22 @@ async function reloadLedger() {
   if (loading.value && loaded.value) return
   loading.value = true
   try { subscriptions.value = await fetchSubscriptions(); storageError.value = null; loaded.value = true }
-  catch (cause) { storageError.value = cause instanceof Error ? cause.message : 'The ledger could not be loaded. Reload before making changes.' }
+  catch (cause) { storageError.value = cause instanceof Error ? cause.message : 'Subscriptions could not be loaded. Reload before making changes.' }
   finally { loading.value = false }
 }
-onMounted(reloadLedger)
+function syncCurrentSection() { currentSection.value = window.location.hash.slice(1) || 'overview' }
+onMounted(() => { void reloadLedger(); window.addEventListener('hashchange', syncCurrentSection) })
 const notice = ref('')
 const today = ref(new Date().toISOString().slice(0, 10))
 const timer = window.setInterval(() => { today.value = new Date().toISOString().slice(0, 10) }, 60_000)
-onUnmounted(() => window.clearInterval(timer))
+onUnmounted(() => { window.clearInterval(timer); window.removeEventListener('hashchange', syncCurrentSection) })
 const showForm = ref(false)
 const editing = ref<StoredSubscription>()
 const windowDays = ref(30)
 const search = ref('')
 const statusFilter = ref('all')
 const activeCount = computed(() => subscriptions.value.filter((item) => item.status === 'active').length)
+const hasConfiguredProvider = computed(() => Object.values(connectionStatuses.value ?? {}).some(status => status.configured))
 const totals = computed(() => normalizedTotals(subscriptions.value))
 const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
 const connectedMeteredProviders = computed(() => (['aws', 'cloudflare'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
@@ -99,19 +102,19 @@ async function setStatus(item: StoredSubscription) {
     const saved = await updateStoredSubscription({ ...item, status }, item.revision)
     if (saved.id !== item.id) throw new Error('The saved subscription could not be confirmed. Reload before making changes.')
     subscriptions.value = subscriptions.value.map(existing => existing.id === item.id ? saved : existing)
-    notice.value = `${item.name} ${status === 'active' ? 'resumed' : 'paused'} in your ledger.`
+    notice.value = `${item.name} ${status === 'active' ? 'resumed' : 'paused'}.`
   } catch (cause) { mutationError(cause) }
   finally { busy.value = false }
 }
 async function remove(item: StoredSubscription) {
-  if (blocked.value || !window.confirm(`Delete ${item.name} from your ledger? This does not cancel the service.`)) return
+  if (blocked.value || !window.confirm(`Delete ${item.name}? This does not cancel the service.`)) return
   busy.value = true
   try { await deleteStoredSubscription(item.id, item.revision); subscriptions.value = subscriptions.value.filter(({ id }) => id !== item.id); notice.value = `${item.name} deleted.` }
   catch (cause) { mutationError(cause) }
   finally { busy.value = false }
 }
 async function importLedger(items: Subscription[]): Promise<ImportResult> {
-  if (blocked.value) throw new Error('Reload the ledger before importing.')
+  if (blocked.value) throw new Error('Reload subscriptions before importing.')
   busy.value = true
   try {
     const result = await importStoredSubscriptions(items)
@@ -119,15 +122,6 @@ async function importLedger(items: Subscription[]): Promise<ImportResult> {
     return result
   } catch (cause) { mutationError(cause); throw cause }
   finally { busy.value = false }
-}
-async function loadExamples() {
-  const examples = [
-    { name: 'Bitwarden · example', amount: 10, recurrenceInterval: 1, recurrenceUnit: 'year' as const },
-    { name: 'Hostinger · example', amount: 192, recurrenceInterval: 4, recurrenceUnit: 'year' as const },
-    { name: 'VPS · example', amount: 12, recurrenceInterval: 1, recurrenceUnit: 'month' as const },
-  ].map((item) => createSubscription({ ...item, id: crypto.randomUUID(), billingType: 'fixed', currency: 'USD', nextRenewalAt: today.value, status: 'active' }))
-  try { await importLedger(examples); notice.value = 'Example subscriptions loaded. Edit or delete them before adding your real costs.' }
-  catch { /* The request error is shown above the ledger. */ }
 }
 async function reloadFinancialViews() {
   await Promise.allSettled([reloadLedger(), infrastructure.value?.reload(), hostinger.value?.reload()])
@@ -139,15 +133,15 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
 <template>
   <a class="skip-link" href="#overview">Skip to dashboard</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="Primary navigation">
-      <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">L</span>ledger<span class="brand-period">.</span></a>
+    <aside class="sidebar">
+      <a class="brand" href="#overview" aria-label="StackDues"><span class="brand-mark" aria-hidden="true">S</span><span aria-hidden="true">tackDues</span></a>
       <p class="workspace-label">Personal workspace</p>
-      <nav><a href="#overview" class="nav-active"><span aria-hidden="true">◫</span> Overview</a><a href="#subscriptions"><span aria-hidden="true">≡</span> Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#infrastructure"><span aria-hidden="true">▤</span> Infrastructure</a><a href="#connections"><span aria-hidden="true">⌁</span> Connections</a><a href="#hostinger-discovery"><span aria-hidden="true">↗</span> Hostinger</a><a href="#history"><span aria-hidden="true">↻</span> History</a></nav>
-      <div class="sidebar-note"><span class="local-indicator" aria-hidden="true"></span><strong>Your private ledger</strong><p>Fixed subscriptions are saved to your account and available across devices.</p></div>
+      <nav aria-label="Primary"><a href="#overview" :aria-current="currentSection === 'overview' ? 'location' : undefined">Overview</a><a href="#subscriptions" :aria-current="currentSection === 'subscriptions' ? 'location' : undefined">Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#connections" :aria-current="currentSection === 'connections' ? 'location' : undefined">Connections</a><a href="#history" :aria-current="currentSection === 'history' ? 'location' : undefined">History</a></nav>
+      <div class="sidebar-note"><span class="local-indicator" aria-hidden="true"></span><strong>Private to your account</strong><p>Fixed subscriptions are saved to your account and available across devices.</p></div>
     </aside>
     <main id="overview" tabindex="-1">
-      <header class="page-header"><div><p class="eyebrow">Your costs, in one place</p><h1>Overview<span class="heading-period">.</span></h1><p class="muted">Know what you pay. See what’s coming.</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><button class="primary-button" :disabled="blocked" @click="openForm()"><span aria-hidden="true">＋</span> Add subscription</button></header>
-      <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload ledger</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
+      <header class="page-header"><div><p class="eyebrow">Your costs, in one place</p><h1>Overview<span class="heading-period">.</span></h1><p class="muted">Know what you pay. See what’s coming.</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><div class="header-actions"><a class="primary-button" href="#connections">{{ hasConfiguredProvider ? 'Manage connections' : 'Connect a provider' }}</a><button class="secondary-button" :disabled="blocked" @click="openForm()">Add manually</button></div></header>
+      <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload subscriptions</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
       <section v-if="loaded" class="provider-overview" aria-labelledby="provider-overview-title">
         <div class="section-header"><div><p class="eyebrow">Connected providers and fixed renewals</p><h2 id="provider-overview-title">Your spending</h2></div></div>
         <div class="provider-overview-grid">
@@ -174,10 +168,10 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
           </article>
         </div>
         <p class="metric-note">Actual charges to date are not a full-month projection. Forecasts already include actuals; currencies remain separate.</p>
-        <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger commitments use last-known provider details. They remain visible in the fixed ledger, but are omitted from upcoming-charge totals until confirmed by a successful sync.</p>
+        <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger commitments use last-known provider details. They remain visible in fixed subscriptions, but are omitted from upcoming-charge totals until confirmed by a successful sync.</p>
       </section>
-      <p v-if="loading" role="status">Loading your private ledger…</p>
-      <p v-else-if="busy" role="status">Saving your ledger…</p>
+      <p v-if="loading" role="status">Loading your subscriptions…</p>
+      <p v-else-if="busy" role="status">Saving your subscriptions…</p>
       <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
       <section v-if="loaded" class="summary" aria-label="Fixed subscription summary">
         <div class="monthly-summary"><div class="metric-label"><span>Fixed monthly equivalent</span><span class="small-label">{{ activeCount }} active</span></div><template v-if="totals.length"><div v-for="total in totals" :key="total.currency" class="monthly-value">{{ money(total.monthly, total.currency) }}<span>/ mo</span></div></template><p v-else class="monthly-value">—<span>/ mo</span></p><p class="metric-note">Your active charges spread over their billing cycles.</p></div>
@@ -204,16 +198,16 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
         </section>
 
       </div>
-      <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">The fixed ledger</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div v-if="subscriptions.length" class="table-tools"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></div></div>
-        <div v-if="loaded && !subscriptions.length" class="ledger-empty"><span class="empty-mark" aria-hidden="true">＋</span><div><h3>Start with what you pay.</h3><p>Add a subscription, a domain, or a VPS. Monthly, yearly, or every four years — it all belongs here.</p><div class="empty-actions"><button class="primary-button" :disabled="blocked" @click="openForm()">Add your first subscription</button><button class="text-button" :disabled="blocked" @click="loadExamples">Try example subscriptions <span aria-hidden="true">↗</span></button></div></div></div>
-        <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in ledger`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
+      <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div v-if="subscriptions.length" class="table-tools"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></div></div>
+        <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No manual subscriptions yet</h3><p>Connect a provider above to sync your costs, or add services such as Bitwarden Premium and ChatGPT Plus yourself.</p></div>
+        <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
       <LegacyImport :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
       <ConnectionsPanel @loaded="setConnectionStatuses" @changed="reloadFinancialViews" />
       <HostingerDiscovery ref="hostinger" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" @loaded="hostingerState = $event" />
       <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :configured-providers="configuredMeteredProviders" :today="today" @loaded="costFeed = $event" />
       <CostHistory :snapshots="costFeed.snapshots" />
-      <footer class="app-footer"><span>ledger<span class="brand-period">.</span></span><p>Fixed subscriptions are saved privately to your account. Imported browser ledgers remain untouched.</p></footer>
+      <footer class="app-footer"><span>StackDues</span><p>Fixed subscriptions are saved privately to your account. Existing browser data remains untouched.</p></footer>
     </main>
   </div>
   <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-error="storageError" :saving="busy" :aria-busy="busy" @save="save" @close="showForm = false" />
