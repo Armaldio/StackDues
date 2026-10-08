@@ -8,7 +8,15 @@ function deny(status = 401) { return new Response('Authentication required', { s
 function redirect(path: string, cookie?: string) { const headers = new Headers({ ...privateHeaders, Location: path }); if (cookie) headers.set('Set-Cookie', cookie); return new Response(null, { status: 303, headers }) }
 function cookie(token: string, age = SESSION_MAX_AGE) { return `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}` }
 function sessionToken(request: Request) { return request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1) }
-function sameOrigin(request: Request) { return request.headers.get('Origin') === new URL(request.url).origin && request.headers.get('Sec-Fetch-Site') !== 'cross-site' }
+function sameOrigin(request: Request) {
+  const origin = request.headers.get('Origin')
+  const site = request.headers.get('Sec-Fetch-Site')
+  if (site === 'cross-site') return false
+  if (origin === new URL(request.url).origin) return true
+  // Some browsers submit same-origin HTML forms with an opaque Origin. Accept
+  // that only when Fetch Metadata confirms the document and request are same-origin.
+  return origin === 'null' && site === 'same-origin'
+}
 async function readForm(request: Request): Promise<URLSearchParams> {
   if (request.headers.get('Content-Type')?.split(';')[0] !== 'application/x-www-form-urlencoded') throw new Error('Invalid form')
   const reader = request.body?.getReader()
