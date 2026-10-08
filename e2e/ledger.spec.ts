@@ -1,5 +1,30 @@
 import { expect, test, type Page } from '@playwright/test'
 
+async function mockLedger(page: Page, initial: Record<string, unknown>[] = [], mockCosts = true) {
+  let subscriptions = initial
+  if (mockCosts) await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
+  await page.route('**/api/subscriptions**', async route => {
+    const request = route.request(), path = new URL(request.url()).pathname
+    if (request.method() === 'GET') return route.fulfill({ json: subscriptions })
+    const body = request.method() === 'DELETE' ? undefined : request.postDataJSON()
+    if (path.endsWith('/import')) {
+      const createdIds: string[] = []
+      for (const item of body.subscriptions) if (!subscriptions.some(existing => existing.id === item.id)) { subscriptions.push({ ...item, revision: 1 }); createdIds.push(item.id) }
+      return route.fulfill({ json: { subscriptions, createdIds } })
+    }
+    if (request.method() === 'POST') { const item = { ...body, revision: 1 }; subscriptions.push(item); return route.fulfill({ json: item }) }
+    const id = decodeURIComponent(path.split('/').at(-1)!)
+    const previous = subscriptions.find(item => item.id === id)!
+    if (request.method() === 'DELETE') {
+      if (request.postData() !== null || request.headers()['if-match'] !== `"${previous.revision}"`) return route.fulfill({ status: 409, json: { error: 'Revision conflict' } })
+      subscriptions = subscriptions.filter(item => item.id !== id); return route.fulfill({ json: { deleted: true } })
+    }
+    const item = { ...body.subscription, revision: Number(previous.revision) + 1 }
+    subscriptions = subscriptions.map(existing => existing.id === id ? item : existing)
+    return route.fulfill({ json: item })
+  })
+}
+
 async function add(page: Page, name: string, amount: string, interval: string, unit: string, currency = 'USD') {
   await page.getByRole('button', { name: 'Add subscription', exact: true }).click()
   const form = page.getByRole('dialog')
@@ -16,6 +41,7 @@ test('fresh ledger supports real recurrence, edits, status changes, deletion, an
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+  await mockLedger(page)
   await page.goto('./')
   await expect(page.getByText('Start with what you pay.')).toBeVisible()
   await add(page, 'Bitwarden', '10', '1', 'year')
@@ -57,6 +83,7 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
   const feed = { snapshots: [snapshot, { ...snapshot, id: 'aws-forecast', kind: 'forecast', amount: 30, metadata: { period: 'current' } }, { ...snapshot, id: 'cf-actual', provider: 'cloudflare', amount: 3, capturedAt, metadata: { period: 'current', projectionUnavailable: true, breakdown: [{ service: 'R2 Storage', amount: 3, currency: 'USD' }] } }], providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'error', lastSyncedAt: capturedAt, error: 'raw-provider-secret' } } }
   let fail = false
   await page.route('**/api/costs', route => route.fulfill(fail ? { status: 503, body: 'offline' } : { json: feed }))
+  await mockLedger(page, [], false)
   await page.goto('./')
   const infrastructure = page.locator('#infrastructure')
   await expect(infrastructure.getByText('EC2', { exact: true })).toBeVisible()
@@ -77,4 +104,29 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
     await page.setViewportSize({ width, height: 1000 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   }
+})
+
+test('explicit legacy import backs up original JSON, preserves existing account edits and keeps browser records', async ({ page }) => {
+  const legacy = { id: 'old-bitwarden', name: 'Bitwarden', billingType: 'fixed', amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-10-08', status: 'active' }
+  const raw = JSON.stringify([legacy, { ...legacy, id: 'old-vps', name: 'VPS', amount: 12, recurrenceUnit: 'month' }], null, 2)
+  await page.addInitScript(raw => localStorage.setItem('ledger.subscriptions.v1', raw), raw)
+  await mockLedger(page, [{ ...legacy, amount: 20, revision: 2 }])
+  await page.goto('./')
+  const panel = page.locator('.legacy-import')
+  await panel.locator('summary').click()
+  await panel.getByRole('button', { name: 'Use this browser’s ledger' }).click()
+  await panel.getByRole('button', { name: 'Preview import' }).click()
+  await expect(panel.getByRole('button', { name: 'Import to my account' })).toBeDisabled()
+  const downloadPromise = page.waitForEvent('download')
+  await panel.getByRole('button', { name: 'Download original backup' }).click()
+  const download = await downloadPromise
+  const { readFile } = await import('node:fs/promises')
+  expect(await readFile((await download.path())!, 'utf8')).toBe(raw)
+  await panel.getByRole('button', { name: 'Import to my account' }).click()
+  await expect(panel.getByRole('status')).toContainText('1 subscriptions imported and verified')
+  await expect(page.getByRole('row').filter({ hasText: 'Bitwarden' })).toContainText('USD 20.00')
+  await expect(page.getByRole('row').filter({ hasText: 'VPS' })).toContainText('USD 12.00')
+  expect(await page.evaluate(() => localStorage.getItem('ledger.subscriptions.v1'))).toBe(raw)
+  await page.reload()
+  await expect(page.getByRole('row').filter({ hasText: 'VPS' })).toBeVisible()
 })

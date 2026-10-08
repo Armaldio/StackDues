@@ -14,7 +14,8 @@
     "deploy": "wrangler deploy",
     "test:worker": "node --test tests/worker-security.integration.ts",
     "test:aws-worker": "node --test tests/aws-worker.integration.ts",
-    "cf:types": "wrangler types --env-interface CloudflareEnv"
+    "cf:types": "wrangler types --env-interface CloudflareEnv",
+    "test:d1": "node --test tests/d1.integration.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cost-explorer": "^3.1147.0",
