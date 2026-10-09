@@ -5,7 +5,7 @@ import { overviewInsights } from '../domain/overview-insights'
 import type { ServiceSelection } from '../domain/service-selection'
 import { nextRenewalOnOrAfter, normalizeCost, type Subscription } from '../domain/subscriptions'
 import { isProviderStale, type CostFeed } from '../lib/cost-feed'
-import type { HostingerDiscovery } from '../lib/hostinger-api'
+import type { HostingerDiscovery, HostingerDiscoveryRow } from '../lib/hostinger-api'
 
 const props = defineProps<{
   selection: ServiceSelection
@@ -51,6 +51,13 @@ const dataDescription = computed(() => {
 function money(amount: number, currency: string) {
   try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) }
   catch { return `${currency} ${amount.toFixed(2)}` }
+}
+function hostingerStatus(item: HostingerDiscoveryRow) {
+  if (item.excluded) return 'Excluded'
+  if (!item.seenInLatestSync) return 'Stale · absent from latest sync'
+  if (item.linkedSubscriptionId) return item.automaticallyLinked ? 'Tracked automatically' : 'Linked to manual subscription'
+  if (item.possibleMatches.length || item.providerNameCollision) return 'Needs review'
+  return item.renewalAvailable ? 'Available to track' : 'Unsupported / not renewing'
 }
 function period(snapshot: CostSnapshot) {
   if (snapshot.metadata?.scope === 'finalized-invoice-total') return `Finalized invoice · ${snapshot.periodStart.slice(0, 7)}`
@@ -99,7 +106,7 @@ onUnmounted(() => { if (dialog.value?.open) dialog.value.close() })
     </template>
 
     <template v-else-if="provider === 'hostinger'">
-      <section class="detail-block"><h3>Renewal coverage</h3><p>{{ hostingerSync?.status === 'error' ? 'Hostinger sync failed; previously saved subscription data is retained.' : hostingerSync?.lastSyncedAt ? `Last successful sync · ${new Date(hostingerSync.lastSyncedAt).toLocaleString()}` : 'No successful Hostinger sync is available.' }}</p><p class="detail-note">Renewals appear in fixed subscriptions when linked and eligible. Hostinger renewals are not provider-reported metered spend or imported invoice records.</p><p v-if="!hostingerSubscriptions.length" class="detail-note">No linked Hostinger fixed commitments are available.</p><ul v-else class="detail-observations"><li v-for="item in hostingerSubscriptions" :key="item.id"><span><strong>{{ item.name }} · {{ money(item.amount, item.currency) }}</strong><small>Every {{ item.recurrenceInterval }} {{ item.recurrenceUnit }}{{ item.recurrenceInterval === 1 ? '' : 's' }} · next renewal {{ nextRenewalOnOrAfter(item, today) ?? 'none scheduled' }} · {{ item.status }}</small><small v-if="hostingerRows?.some(row => row.linkedSubscriptionId === item.id && row.excluded)">Excluded from commitments</small><small v-else-if="hostingerRows?.some(row => row.linkedSubscriptionId === item.id && !row.seenInLatestSync)">Linked renewal details are stale</small></span></li></ul><a class="secondary-button" href="/services" @click="close">Review Hostinger subscriptions</a></section>
+      <section class="detail-block"><h3>Renewal coverage</h3><p>{{ hostingerSync?.status === 'error' ? 'Hostinger sync failed; previously discovered services and commitments are retained.' : hostingerSync?.lastSyncedAt ? `Last successful sync · ${new Date(hostingerSync.lastSyncedAt).toLocaleString()}` : 'No successful Hostinger sync is available.' }}</p><p class="detail-note">Hostinger renewal amounts are fixed commitments, not provider-reported metered spend or imported invoices.</p><ul v-if="hostingerRows?.length" class="detail-observations"><li v-for="item in hostingerRows" :key="item.externalId"><span><strong>{{ item.name }} · {{ item.renewalPrice === null ? 'Price unavailable' : money(item.renewalPrice, item.currency) }}</strong><small>{{ hostingerStatus(item) }} · {{ item.recurrenceInterval && item.recurrenceUnit && item.recurrenceUnit !== 'unsupported' ? `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` : 'Billing period unsupported' }} · next renewal {{ item.nextBillingAt?.slice(0, 10) ?? 'not reported' }}</small><small>{{ item.automaticallyLinked ? 'Origin: Hostinger · included once in fixed commitments.' : item.linkedSubscriptionId ? 'Origin: Hostinger · linked to your existing subscription.' : item.possibleMatches.length ? `Possible manual match: ${item.possibleMatches.map(match => match.name).join(', ')}.` : 'Origin: Hostinger account.' }}</small></span></li></ul><p v-else class="detail-note">No discovered Hostinger services are available.</p><p v-if="!hostingerSubscriptions.length" class="detail-note">No linked Hostinger fixed commitments are available.</p><ul v-else class="detail-observations"><li v-for="item in hostingerSubscriptions" :key="item.id"><span><strong>{{ item.name }} · {{ money(item.amount, item.currency) }}</strong><small>Every {{ item.recurrenceInterval }} {{ item.recurrenceUnit }}{{ item.recurrenceInterval === 1 ? '' : 's' }} · next renewal {{ nextRenewalOnOrAfter(item, today) ?? 'none scheduled' }} · {{ item.status }}</small></span></li></ul><a class="secondary-button" href="/services" @click="close">Review Hostinger subscriptions</a></section>
     </template>
 
     <template v-else-if="provider === 'github'">
