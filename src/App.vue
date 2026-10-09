@@ -6,7 +6,9 @@ import ConnectionsPanel from './components/ConnectionsPanel.vue'
 import HostingerDiscovery from './components/HostingerDiscovery.vue'
 import CostHistory from './components/CostHistory.vue'
 import LegacyImport from './components/LegacyImport.vue'
-import ServiceDetail, { type ServiceSelection } from './components/ServiceDetail.vue'
+import ServiceDetail from './components/ServiceDetail.vue'
+import SpendingTimeline from './components/SpendingTimeline.vue'
+import type { ServiceSelection } from './domain/service-selection'
 import { nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
@@ -43,7 +45,6 @@ const timer = window.setInterval(() => { today.value = new Date().toISOString().
 onUnmounted(() => { window.clearInterval(timer); window.removeEventListener('hashchange', syncCurrentSection) })
 const showForm = ref(false)
 const editing = ref<StoredSubscription>()
-const windowDays = ref(30)
 const search = ref('')
 const statusFilter = ref('all')
 const serviceSelection = ref<ServiceSelection | null>(null)
@@ -94,7 +95,6 @@ const meteredWarning = computed(() => {
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
 const currentHostingerLedger = computed(() => new Set((hostingerState.value?.subscriptions ?? []).filter(item => item.seenInLatestSync && hostingerState.value?.sync.status === 'synced').map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const confirmedSubscriptions = computed(() => subscriptions.value.filter(item => item.provider !== 'Hostinger' || !hostingerState.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id) || currentHostingerLedger.value.has(item.id)))
-const renewals = computed(() => upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(windowDays.value)))
 const hasStaleHostinger = computed(() => !!hostingerState.value?.subscriptions.some(item => item.linkedSubscriptionId && !item.seenInLatestSync))
 function chargeTotals(charges: Renewal[]): { currency: string; amount: number | null }[] {
   try { return renewalChargeTotals(charges) }
@@ -262,11 +262,7 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
       </section>
       <p v-if="loaded" class="summary-footnote">Currencies are kept separate. Renewal windows include today · {{ dateLabel(today) }} UTC.</p>
       <div v-if="loaded" class="content-columns single-column">
-        <section class="renewals-panel" aria-labelledby="renewals-title"><div class="section-header"><div><p class="eyebrow">On the horizon</p><h2 id="renewals-title">Upcoming renewals</h2></div><div class="segmented-control" aria-label="Renewal window"><button :aria-pressed="windowDays === 30" @click="windowDays = 30">30 days</button><button :aria-pressed="windowDays === 90" @click="windowDays = 90">90 days</button></div></div>
-          <div v-if="!renewals.length" class="quiet-empty"><span class="calendar-icon" aria-hidden="true">□</span><h3>Nothing coming up</h3><p>{{ activeCount ? `No active renewals in the next ${windowDays} days.` : 'Add a subscription to see your next charges here.' }}</p></div>
-          <ol v-else class="renewal-list"><li v-for="renewal in renewals" :key="`${renewal.subscription.id}-${renewal.date}`"><time :datetime="renewal.date" class="renewal-date"><span>{{ new Date(`${renewal.date}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' }) }}</span><strong>{{ renewal.date.slice(8) }}</strong></time><div class="renewal-details"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: renewal.subscription.id }, $event)"><strong>{{ renewal.subscription.name }}</strong><span>{{ recurrence(renewal.subscription) }}</span></button></div><strong class="amount">{{ money(renewal.amount, renewal.currency) }}</strong></li></ol>
-        </section>
-
+        <SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" @select="openServiceDetails($event)" />
       </div>
       <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
