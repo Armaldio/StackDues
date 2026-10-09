@@ -9,7 +9,7 @@ import LegacyImport from './components/LegacyImport.vue'
 import ServiceDetail from './components/ServiceDetail.vue'
 import SpendingTimeline from './components/SpendingTimeline.vue'
 import type { ServiceSelection } from './domain/service-selection'
-import { nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
+import { nextRenewalOnOrAfter, normalizeCost, normalizedTotals, upcomingRenewals, type Subscription } from './domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
@@ -132,7 +132,6 @@ function editDetailedSubscription(item: Subscription) {
   void closeServiceDetails()
   if (stored) openForm(stored)
 }
-const activeCount = computed(() => subscriptions.value.filter((item) => item.status === 'active').length)
 const hasConfiguredProvider = computed(() => Object.values(connectionStatuses.value ?? {}).some(status => status.configured))
 const totals = computed(() => normalizedTotals(subscriptions.value))
 const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
@@ -145,7 +144,17 @@ const providerUsage = computed(() => ({
   cloudflare: usageTotals(meterSnapshots.value, today.value, ['cloudflare']),
   openai: usageTotals(meterSnapshots.value, today.value, ['openai']),
 }))
+const actualPeriodLabels = computed(() => Object.fromEntries(trackedTotals.value.map(({ currency }) => [currency, meteredProviders.map(provider => {
+  const usage = providerUsage.value[provider].find(item => item.currency === currency && item.hasActual)
+  return usage ? `${providerName(provider)} · ${periodDescription(provider, currency)}` : null
+}).filter((value): value is string => value !== null).join(' · ')])))
 const spendingInsights = computed(() => overviewInsights(costFeed.value.snapshots))
+const featuredInsight = computed(() => spendingInsights.value.find(item => item.drivers.length || item.changePercent !== null) ?? spendingInsights.value[0])
+const lastSuccessfulSync = computed(() => [
+  ...Object.values(costFeed.value.providers).map(provider => provider.lastSyncedAt),
+  hostingerState.value?.sync.lastSyncedAt,
+].filter((value): value is string => typeof value === 'string').sort().at(-1) ?? null)
+const upcomingCharges = computed(() => upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(365)).slice(0, 3))
 const hostingerLinkedIds = computed(() => new Set((hostingerState.value?.subscriptions ?? []).map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const hostingerFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider === 'Hostinger' || hostingerLinkedIds.value.has(item.id))))
 const manualFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider !== 'Hostinger' && !hostingerLinkedIds.value.has(item.id))))
@@ -163,13 +172,6 @@ function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z
 const currentHostingerLedger = computed(() => new Set((hostingerState.value?.subscriptions ?? []).filter(item => item.seenInLatestSync && hostingerState.value?.sync.status === 'synced').map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const confirmedSubscriptions = computed(() => subscriptions.value.filter(item => item.provider !== 'Hostinger' || !hostingerState.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id) || currentHostingerLedger.value.has(item.id)))
 const hasStaleHostinger = computed(() => !!hostingerState.value?.subscriptions.some(item => item.linkedSubscriptionId && !item.seenInLatestSync))
-function chargeTotals(charges: Renewal[]): { currency: string; amount: number | null }[] {
-  try { return renewalChargeTotals(charges) }
-  catch { return [...new Set(charges.map(charge => charge.currency))].sort().map(currency => ({ currency, amount: null })) }
-}
-const due30 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(30))))
-const due365 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(365))))
-const due90 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(90))))
 const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
 function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
@@ -268,6 +270,37 @@ function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costF
       <header class="page-header"><div><p class="eyebrow">{{ sectionMeta.eyebrow }}</p><h1>{{ sectionMeta.title }}<span class="heading-period">.</span></h1><p class="muted">{{ sectionMeta.subtitle }}</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><div class="header-actions"><NuxtLink v-if="currentSection !== 'connections'" class="primary-button" to="/connections">{{ hasConfiguredProvider ? 'Manage connections' : 'Connect a provider' }}</NuxtLink><button v-if="currentSection === 'services' || currentSection === 'overview'" class="secondary-button" :disabled="blocked" @click="openForm()">Add manually</button></div></header>
       <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload subscriptions</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
       <template v-if="currentSection === 'overview'">
+      <p v-if="loading" role="status">Loading your subscriptions…</p>
+      <p v-else-if="busy" role="status">Saving your subscriptions…</p>
+      <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
+      <section v-if="loaded" class="tracked-spending overview-snapshot" aria-labelledby="tracked-spending-title">
+        <div class="overview-section-heading"><div><p class="eyebrow">Your monthly picture</p><h2 id="tracked-spending-title">Known spending</h2></div><p v-if="lastSuccessfulSync" class="overview-freshness">{{ costFeed.snapshots.length ? 'Updated' : 'Checked' }} {{ dateLabel(lastSuccessfulSync.slice(0, 10)) }}</p><p v-else class="overview-freshness">{{ hasConfiguredProvider ? 'Waiting for first billing data' : 'No billing connections yet' }}</p></div>
+        <p v-if="meteredWarning" class="feed-warning" role="status">{{ meteredWarning }}</p>
+        <div v-if="trackedTotals.length" class="tracked-spending-grid">
+          <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card overview-currency-card">
+            <p class="overview-currency">{{ total.currency }}</p>
+            <p class="overview-primary-value">{{ total.combinedMonthlyEstimate === null ? money(total.fixedMonthly, total.currency) : money(total.combinedMonthlyEstimate, total.currency) }}</p>
+            <p class="overview-value-label">{{ total.combinedMonthlyEstimate === null ? 'Known fixed monthly commitments' : 'Estimated monthly spend' }}</p>
+            <dl class="overview-breakdown"><div><dt>Fixed monthly equivalent</dt><dd>{{ money(total.fixedMonthly, total.currency) }}</dd></div><div><dt>Metered actual · month to date</dt><dd>{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd></div><div><dt>Metered full-month forecast</dt><dd>{{ total.meteredForecast === null ? 'Unavailable' : money(total.meteredForecast, total.currency) }}</dd></div></dl>
+            <p v-if="actualPeriodLabels[total.currency]" class="overview-period-note">Reported periods · {{ actualPeriodLabels[total.currency] }}</p>
+            <p v-if="total.combinedMonthlyEstimate === null && connectedMeteredProviders.length" class="metric-note">Known fixed and reported actual costs remain visible while a complete forecast is unavailable.</p>
+          </article>
+        </div>
+        <div v-else class="overview-empty"><p>No spending data has arrived yet.</p><p>Connect a provider or add a fixed service to get started.</p><NuxtLink class="text-button" to="/services">Add a fixed service</NuxtLink></div>
+      </section>
+      <section v-if="loaded" class="overview-next-charges" aria-labelledby="next-charges-title">
+        <div class="overview-section-heading"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="next-charges-title">Coming up next</h2></div><NuxtLink class="text-button" to="/services">Manage services</NuxtLink></div>
+        <ul v-if="upcomingCharges.length" class="overview-renewal-list"><li v-for="charge in upcomingCharges" :key="`${charge.subscription.id}-${charge.date}`"><button class="overview-renewal-name service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: charge.subscription.id }, $event)">{{ charge.subscription.name }}<span>{{ charge.subscription.provider || 'Fixed subscription' }}</span></button><span class="overview-renewal-date">{{ dateLabel(charge.date) }}</span><strong class="overview-renewal-amount">{{ money(charge.amount, charge.currency) }}</strong></li></ul>
+        <p v-else class="quiet-empty">No confirmed renewals are scheduled in the next year.</p>
+        <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger renewal dates need confirmation and are omitted here. <NuxtLink to="/services">Review Hostinger services</NuxtLink></p>
+      </section>
+      <section v-if="loaded" class="spending-insights overview-featured-insight" aria-labelledby="spending-insights-title">
+        <div class="overview-section-heading"><div><p class="eyebrow">One useful signal</p><h2 id="spending-insights-title">Cost driver &amp; trend</h2></div><NuxtLink class="text-button" to="/history">View history</NuxtLink></div>
+        <article v-if="featuredInsight" class="insight-card"><h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider: featuredInsight.provider }, $event)">{{ providerName(featuredInsight.provider) }} · {{ featuredInsight.currency }}</button></h3><p class="insight-total">{{ money(featuredInsight.actual, featuredInsight.currency) }}<span> reported actuals</span></p><p v-if="featuredInsight.previousComparable !== null && featuredInsight.changePercent !== null" class="metric-note">{{ money(featuredInsight.previousComparable, featuredInsight.currency) }} in the aligned prior period · {{ featuredInsight.changePercent > 0 ? '+' : '' }}{{ featuredInsight.changePercent.toFixed(1) }}%</p><p v-else class="metric-note">No aligned prior period is available yet.</p><ul v-if="featuredInsight.drivers.length" class="insight-drivers"><li v-for="driver in featuredInsight.drivers.slice(0, 1)" :key="driver.service"><span>Top service · {{ driver.service }}</span><strong>{{ money(driver.amount, featuredInsight.currency) }}</strong></li></ul></article>
+        <p v-else class="quiet-empty">A cost trend will appear after enough provider history is available.</p>
+      </section>
+      <details v-if="loaded" class="provider-observations">
+        <summary>Provider details and sync status</summary>
       <section v-if="loaded" class="provider-overview" aria-labelledby="provider-overview-title">
         <div class="section-header"><div><p class="eyebrow">Connected providers and fixed renewals</p><h2 id="provider-overview-title">Your spending</h2></div></div>
         <div class="provider-overview-grid">
@@ -300,44 +333,8 @@ function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costF
           </article>
         </div>
         <p class="metric-note">Actual charges to date are not a full-month projection. Forecasts already include actuals; currencies remain separate. DigitalOcean finalized invoices are shown for their billing periods, not as current-month accrual.</p>
-        <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger commitments use last-known provider details. They remain visible in fixed subscriptions, but are omitted from upcoming-charge totals until confirmed by a successful sync.</p>
       </section>
-      <p v-if="loading" role="status">Loading your subscriptions…</p>
-      <p v-else-if="busy" role="status">Saving your subscriptions…</p>
-      <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
-      <section v-if="loaded" class="summary" aria-label="Fixed subscription summary">
-        <div class="monthly-summary"><div class="metric-label"><span>Fixed monthly equivalent</span><span class="small-label">{{ activeCount }} active</span></div><template v-if="totals.length"><div v-for="total in totals" :key="total.currency" class="monthly-value">{{ money(total.monthly, total.currency) }}<span>/ mo</span></div></template><p v-else class="monthly-value">—<span>/ mo</span></p><p class="metric-note">Your active charges spread over their billing cycles.</p></div>
-        <div class="secondary-metrics"><div class="metric"><p class="metric-label">Annual equivalent</p><p v-for="total in totals" :key="total.currency" class="metric-value">{{ money(total.yearly, total.currency) }}</p><p v-if="!totals.length" class="metric-value">—</p><p class="metric-note">Normalized rate, not this year’s bill.</p><p v-for="total in due365" :key="total.currency" class="metric-note">{{ money(total.amount, total.currency) }} due in 365 days.</p></div><div class="metric"><p class="metric-label">Due in 30 days</p><p v-for="total in due30" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due30.length" class="metric-value">—</p><p class="metric-note">Actual upcoming charges.</p></div><div class="metric"><p class="metric-label">Due in 90 days</p><p v-for="total in due90" :key="total.currency" class="metric-value">{{ money(total.amount, total.currency) }}</p><p v-if="!due90.length" class="metric-value">—</p><p class="metric-note">Includes the next 30 days.</p></div></div>
-      </section>
-      <section v-if="loaded" class="tracked-spending" aria-labelledby="tracked-spending-title">
-        <div class="section-header"><div><p class="eyebrow">Fixed commitments + metered usage</p><h2 id="tracked-spending-title">Tracked monthly spend</h2></div></div>
-        <p class="metric-note">Metered actuals are month to date. Full-month forecasts already include actuals, so only the forecast is combined with fixed commitments.</p>
-        <p v-if="meteredWarning" class="feed-warning" role="status">{{ meteredWarning }}</p>
-        <div v-if="trackedTotals.length" class="tracked-spending-grid">
-          <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card">
-            <h3>{{ total.currency }}</h3>
-            <dl><div><dt>Fixed monthly equivalent</dt><dd>{{ money(total.fixedMonthly, total.currency) }}</dd></div><div><dt>Metered actual, month to date</dt><dd>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</dd></div><div><dt>Metered full-month forecast</dt><dd>{{ total.meteredForecast === null ? 'Unavailable' : money(total.meteredForecast, total.currency) }}</dd></div></dl>
-            <p class="combined-total">{{ total.combinedMonthlyEstimate === null ? connectedMeteredProviders.length ? 'Combined estimate unavailable' : 'Fixed commitments only' : `Combined estimated monthly spend · ${money(total.combinedMonthlyEstimate, total.currency)}` }}</p>
-          </article>
-        </div>
-        <p v-else class="quiet-empty">Add a fixed subscription or connect a metered provider to see tracked spending.</p>
-      </section>
-      <section v-if="loaded" class="spending-insights" aria-labelledby="spending-insights-title">
-        <div class="section-header"><div><p class="eyebrow">Provider observations</p><h2 id="spending-insights-title">Cost drivers &amp; trend</h2></div></div>
-        <div v-if="spendingInsights.length" class="insight-grid">
-          <article v-for="insight in spendingInsights" :key="`${insight.provider}-${insight.currency}`" class="insight-card">
-            <h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider: insight.provider }, $event)">{{ providerName(insight.provider) }} <span class="metric-note">{{ insight.currency }} reported actuals</span></button></h3>
-            <p class="insight-total">{{ money(insight.actual, insight.currency) }}</p>
-            <p v-if="insight.previousComparable !== null && insight.changePercent !== null" class="metric-note">{{ money(insight.previousComparable, insight.currency) }} in the aligned prior period · {{ insight.changePercent > 0 ? '+' : '' }}{{ insight.changePercent.toFixed(1) }}%</p>
-            <p v-else class="metric-note">Not enough comparable history for a trend.</p>
-            <ul v-if="insight.drivers.length" class="insight-drivers"><li v-for="driver in insight.drivers.slice(0, 3)" :key="driver.service"><span>{{ driver.service }}</span><strong>{{ money(driver.amount, insight.currency) }}</strong></li></ul>
-            <p v-else class="metric-note">Service-level cost detail is unavailable.</p>
-          </article>
-        </div>
-        <p v-else class="quiet-empty">Provider cost insights will appear after a successful billing sync.</p>
-        <p class="metric-note">Trends compare only aligned periods from the same provider and currency. Positive service charges are ranked; credits remain in actual totals.</p>
-      </section>
-      <p v-if="loaded" class="summary-footnote">Currencies are kept separate. Renewal windows include today · {{ dateLabel(today) }} UTC.</p>
+      </details>
       </template>
       <section v-if="currentSection === 'services'" id="services" class="services-screen">
       <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>

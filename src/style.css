@@ -94,6 +94,33 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .tracked-spending-card dt { color: var(--muted); }
 .tracked-spending-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .tracked-spending-card .combined-total { font-size: .82rem; font-weight: 600; }
+.overview-snapshot, .overview-next-charges, .overview-featured-insight { margin: 0 0 1.5rem; }
+.overview-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; }
+.overview-section-heading h2 { font-size: 1.45rem; }
+.overview-freshness { color: var(--muted); font-size: .75rem; }
+.overview-currency-card { padding: 1.1rem 1.25rem; border-top: 3px solid var(--accent); }
+.overview-currency { color: var(--muted); font-size: .72rem; font-weight: 600; letter-spacing: .12em; }
+.overview-primary-value { margin-top: .45rem; font: 400 clamp(2rem, 3vw, 2.8rem)/1.2 var(--display); letter-spacing: -.04em; overflow-wrap: anywhere; }
+.overview-value-label { color: var(--muted); font-size: .78rem; }
+.overview-breakdown { margin: .9rem 0 0; }
+.overview-breakdown div { display: flex; justify-content: space-between; gap: .75rem; padding: .45rem 0; border-top: 1px solid var(--line); font-size: .76rem; }
+.overview-breakdown dt { color: var(--muted); }
+.overview-breakdown dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.overview-empty { padding: 1.2rem; border: 1px dashed var(--line); background: var(--surface); }
+.overview-empty p + p { margin-top: .25rem; color: var(--muted); font-size: .8rem; }
+.overview-empty .text-button { display: inline-block; margin-top: .55rem; }
+.overview-period-note { margin-top: .55rem; color: var(--muted); font-size: .7rem; }
+.overview-renewal-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.overview-renewal-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; padding: .75rem .5rem; border-bottom: 1px solid var(--line); background: var(--surface); }
+.overview-renewal-name { text-align: left; font-weight: 600; }
+.overview-renewal-name span { display: block; color: var(--muted); font-size: .7rem; font-weight: 400; }
+.overview-renewal-date { color: var(--muted); font-size: .76rem; white-space: nowrap; }
+.overview-renewal-amount { font-family: var(--mono); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.overview-featured-insight .insight-card { padding: .9rem 1.1rem; }
+.overview-featured-insight .insight-total span { font: .75rem var(--sans); color: var(--muted); }
+.provider-observations { margin: 1.25rem 0 2rem; border-top: 1px solid var(--line); }
+.provider-observations > summary { padding: .8rem 0; color: var(--muted); cursor: pointer; font-size: .8rem; font-weight: 600; }
+.provider-observations .provider-overview { margin-top: .5rem; }
 .spending-insights { margin: 0 0 2.5rem; }
 .spending-insights .section-header { margin-bottom: .75rem; }
 .insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: .85rem; }
@@ -211,6 +238,10 @@ tbody tr:last-child > * { border-bottom: 0; }
   h1 { font-size: 2.6rem; }
   .monthly-summary { padding: 1.25rem; }
   .monthly-value { font-size: 2.5rem; }
+  .overview-section-heading { align-items: flex-start; }
+  .overview-renewal-list li { grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .75rem; }
+  .overview-renewal-date { grid-column: 1; }
+  .overview-renewal-amount { grid-column: 2; grid-row: 1 / 3; }
   .secondary-metrics { display: block; padding: 0 1.25rem; }
   .metric { padding: 1rem 0; border-left: 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; align-items: start; column-gap: .75rem; }
   .metric:first-child { border-top: 0; }
