@@ -251,6 +251,13 @@ tbody tr:last-child > * { border-bottom: 0; }
 .connection-card header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; }
 .connection-card h3 { font-size: 1rem; }
 .connection-card > p { margin: .75rem 0; font-size: .8rem; color: var(--muted); }
+.catalog-tools { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin: 0 0 1rem; }
+.catalog-tools label { display: grid; gap: .3rem; min-width: min(100%, 220px); font-size: .72rem; font-weight: 600; }
+.catalog-tools input, .catalog-tools select { min-height: 42px; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); color: var(--ink); }
+.catalog-empty { margin: 1rem 0; padding: 1.2rem; border: 1px dashed var(--line); color: var(--muted); }
+.planned-grid { margin-top: 1rem; }
+.coming-soon-card { background: var(--bg); }
+.planned-pill { color: var(--muted); }
 .connection-editor summary { cursor: pointer; font-weight: 600; font-size: .85rem; margin: 1rem 0; }
 .connection-editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .connection-editor label { display: block; font-size: .8rem; margin: .75rem 0; }
