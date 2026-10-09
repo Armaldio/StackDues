@@ -11,6 +11,7 @@ const props = defineProps<{
   selection: ServiceSelection
   feed: CostFeed
   subscriptions: readonly Subscription[]
+  subscriptionsLoaded: boolean
   today: string
   hostingerSync?: HostingerDiscovery['sync']
   hostingerRows?: readonly HostingerDiscovery['subscriptions'][number][]
@@ -25,7 +26,7 @@ const subscription = computed(() => {
   return selection.kind === 'subscription' ? props.subscriptions.find(item => item.id === selection.id) : undefined
 })
 const provider = computed(() => props.selection.kind === 'provider' ? props.selection.provider : subscription.value?.provider?.toLowerCase() === 'hostinger' ? 'hostinger' : undefined)
-const title = computed(() => subscription.value?.name ?? (provider.value ? nameByProvider[provider.value] : 'Service details'))
+const title = computed(() => subscription.value?.name ?? (props.selection.kind === 'subscription' ? props.subscriptionsLoaded ? 'Subscription unavailable' : 'Loading subscription' : provider.value ? nameByProvider[provider.value] : 'Service details'))
 const providerSnapshots = computed(() => provider.value && provider.value !== 'hostinger' && provider.value !== 'github'
   ? latestCostSnapshots(props.feed.snapshots.filter(snapshot => snapshot.provider === provider.value)).sort((a, b) => b.periodStart.localeCompare(a.periodStart) || b.capturedAt.localeCompare(a.capturedAt))
   : [])
@@ -38,6 +39,7 @@ const nextRenewal = computed(() => subscription.value ? nextRenewalOnOrAfter(sub
 const normalized = computed(() => subscription.value ? normalizeCost(subscription.value) : null)
 const syncStatus = computed(() => provider.value && provider.value !== 'hostinger' && provider.value !== 'github' ? props.feed.providers[provider.value] : undefined)
 const dataDescription = computed(() => {
+  if (props.selection.kind === 'subscription' && !subscription.value) return props.subscriptionsLoaded ? 'This fixed subscription is no longer available in your account.' : 'Loading the saved subscription details.'
   if (provider.value === 'aws') return 'AWS Cost Explorer reported usage. Forecasts are full-period estimates and are shown separately from actuals.'
   if (provider.value === 'cloudflare') return 'Cloudflare billing-period usage. A full-month forecast and imported invoices are unavailable.'
   if (provider.value === 'openai') return 'Organization-reported API costs by day. This does not include ChatGPT Plus, invoice finality, or a full-month forecast.'
@@ -88,16 +90,20 @@ onUnmounted(() => { if (dialog.value?.open) dialog.value.close() })
           <div v-if="hostingerRow"><dt>Hostinger link</dt><dd>{{ hostingerRow.excluded ? 'Excluded from commitments' : hostingerRow.seenInLatestSync ? 'Linked renewal is current' : 'Linked renewal details are stale' }}</dd></div>
         </dl>
         <p v-if="subscription.status !== 'active'" class="detail-note">Paused or cancelled commitments are not counted as upcoming active renewals.</p>
-        <div class="detail-actions"><button v-if="subscription.provider !== 'Hostinger'" class="secondary-button" type="button" @click="emit('edit', subscription)">Edit subscription</button><a v-else class="secondary-button" href="#hostinger-discovery" @click="close">Manage Hostinger renewal</a><a class="text-button" href="#subscriptions" @click="close">Back to subscriptions</a></div>
+        <div class="detail-actions"><button v-if="subscription.provider !== 'Hostinger'" class="secondary-button" type="button" @click="emit('edit', subscription)">Edit subscription</button><a v-else class="secondary-button" href="/services" @click="close">Manage Hostinger renewal</a><a class="text-button" href="/services" @click="close">Back to services</a></div>
       </section>
     </template>
 
+    <template v-else-if="selection.kind === 'subscription'">
+      <p class="detail-note" role="status">{{ subscriptionsLoaded ? 'This fixed subscription is no longer available in your account.' : 'Loading the saved subscription details.' }}</p>
+    </template>
+
     <template v-else-if="provider === 'hostinger'">
-      <section class="detail-block"><h3>Renewal coverage</h3><p>{{ hostingerSync?.status === 'error' ? 'Hostinger sync failed; previously saved subscription data is retained.' : hostingerSync?.lastSyncedAt ? `Last successful sync · ${new Date(hostingerSync.lastSyncedAt).toLocaleString()}` : 'No successful Hostinger sync is available.' }}</p><p class="detail-note">Renewals appear in fixed subscriptions when linked and eligible. Hostinger renewals are not provider-reported metered spend or imported invoice records.</p><p v-if="!hostingerSubscriptions.length" class="detail-note">No linked Hostinger fixed commitments are available.</p><ul v-else class="detail-observations"><li v-for="item in hostingerSubscriptions" :key="item.id"><span><strong>{{ item.name }} · {{ money(item.amount, item.currency) }}</strong><small>Every {{ item.recurrenceInterval }} {{ item.recurrenceUnit }}{{ item.recurrenceInterval === 1 ? '' : 's' }} · next renewal {{ nextRenewalOnOrAfter(item, today) ?? 'none scheduled' }} · {{ item.status }}</small><small v-if="hostingerRows?.some(row => row.linkedSubscriptionId === item.id && row.excluded)">Excluded from commitments</small><small v-else-if="hostingerRows?.some(row => row.linkedSubscriptionId === item.id && !row.seenInLatestSync)">Linked renewal details are stale</small></span></li></ul><a class="secondary-button" href="#hostinger-discovery" @click="close">Review Hostinger subscriptions</a></section>
+      <section class="detail-block"><h3>Renewal coverage</h3><p>{{ hostingerSync?.status === 'error' ? 'Hostinger sync failed; previously saved subscription data is retained.' : hostingerSync?.lastSyncedAt ? `Last successful sync · ${new Date(hostingerSync.lastSyncedAt).toLocaleString()}` : 'No successful Hostinger sync is available.' }}</p><p class="detail-note">Renewals appear in fixed subscriptions when linked and eligible. Hostinger renewals are not provider-reported metered spend or imported invoice records.</p><p v-if="!hostingerSubscriptions.length" class="detail-note">No linked Hostinger fixed commitments are available.</p><ul v-else class="detail-observations"><li v-for="item in hostingerSubscriptions" :key="item.id"><span><strong>{{ item.name }} · {{ money(item.amount, item.currency) }}</strong><small>Every {{ item.recurrenceInterval }} {{ item.recurrenceUnit }}{{ item.recurrenceInterval === 1 ? '' : 's' }} · next renewal {{ nextRenewalOnOrAfter(item, today) ?? 'none scheduled' }} · {{ item.status }}</small><small v-if="hostingerRows?.some(row => row.linkedSubscriptionId === item.id && row.excluded)">Excluded from commitments</small><small v-else-if="hostingerRows?.some(row => row.linkedSubscriptionId === item.id && !row.seenInLatestSync)">Linked renewal details are stale</small></span></li></ul><a class="secondary-button" href="/services" @click="close">Review Hostinger subscriptions</a></section>
     </template>
 
     <template v-else-if="provider === 'github'">
-      <section class="detail-block"><h3>Billing data unavailable</h3><p>GitHub's available billing data does not provide a supported monetary amount and currency for this account. StackDues does not estimate or invent a total.</p><p class="detail-note">No GitHub connection or billing observations are stored.</p><a class="text-button" href="#connections" @click="close">Back to provider catalog</a></section>
+      <section class="detail-block"><h3>Billing data unavailable</h3><p>GitHub's available billing data does not provide a supported monetary amount and currency for this account. StackDues does not estimate or invent a total.</p><p class="detail-note">No GitHub connection or billing observations are stored.</p><a class="text-button" href="/connections" @click="close">Back to provider catalog</a></section>
     </template>
 
     <template v-else>
@@ -106,7 +112,7 @@ onUnmounted(() => { if (dialog.value?.open) dialog.value.close() })
         <dl class="detail-metrics"><div><dt>Connection</dt><dd>{{ syncStatus?.status === 'not-configured' ? 'Not connected' : syncStatus?.status === 'error' ? 'Sync failed' : syncStatus?.status === 'synced' ? 'Connected' : 'Unavailable' }}</dd></div><div><dt>Last successful sync</dt><dd>{{ syncStatus?.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : 'Unavailable' }}</dd></div><div><dt>Latest attempt</dt><dd>{{ syncStatus?.lastAttemptAt ? new Date(syncStatus.lastAttemptAt).toLocaleString() : 'Unavailable' }}</dd></div></dl>
         <p v-if="syncStatus?.status === 'error'" class="feed-warning" role="status">Sync failed. Previously saved observations remain visible.</p>
         <p v-else-if="syncStatus && isProviderStale(syncStatus)" class="feed-warning" role="status">The last successful sync is more than 36 hours old. Previously saved observations remain visible.</p>
-        <div class="detail-actions"><a class="secondary-button" href="#connections" @click="close">Manage connection or retry</a><a class="text-button" href="#infrastructure" @click="close">View infrastructure</a></div>
+        <div class="detail-actions"><a class="secondary-button" href="/connections" @click="close">Manage connection or retry</a><a class="text-button" href="/services" @click="close">View services</a></div>
       </section>
       <section class="detail-block" aria-labelledby="provider-actual-heading"><h3 id="provider-actual-heading">Reported actuals</h3><p v-if="!actuals.length" class="detail-note">No actual observations are available. This is unknown, not zero.</p><ul v-else class="detail-observations"><li v-for="snapshot in actuals" :key="snapshot.id"><span><strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><small>{{ period(snapshot) }} · {{ snapshot.periodStart }}–{{ snapshot.periodEnd }} (end exclusive)</small></span><small>Captured {{ new Date(snapshot.capturedAt).toLocaleString() }}</small></li></ul></section>
       <section class="detail-block" aria-labelledby="provider-forecast-heading"><h3 id="provider-forecast-heading">Forecasts</h3><p v-if="!forecasts.length" class="detail-note">A full-period forecast is unavailable for this provider or period.</p><ul v-else class="detail-observations"><li v-for="snapshot in forecasts" :key="snapshot.id"><span><strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><small>{{ period(snapshot) }} · {{ snapshot.periodStart }}–{{ snapshot.periodEnd }}</small></span><small>Captured {{ new Date(snapshot.capturedAt).toLocaleString() }}</small></li></ul></section>

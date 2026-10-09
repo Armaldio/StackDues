@@ -4,7 +4,7 @@ import { ConnectionApiError, deleteConnection, fetchConnections, refreshProvider
 import { syncHostinger } from '../lib/hostinger-api'
 import type { CostFeed } from '../lib/cost-feed'
 import type { HostingerDiscovery } from '../lib/hostinger-api'
-const props = defineProps<{ costFeed: CostFeed; hostingerSync?: HostingerDiscovery['sync'] }>()
+const props = defineProps<{ costFeed: CostFeed; hostingerSync?: HostingerDiscovery['sync']; initialStatuses?: ConnectionStatuses }>()
 const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses]; details: [provider: ConnectionProvider | 'github'] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger']
 const names = { aws: 'Amazon Web Services', cloudflare: 'Cloudflare', hostinger: 'Hostinger', openai: 'OpenAI API', digitalocean: 'DigitalOcean' }
@@ -30,7 +30,7 @@ const availability = ref<'all' | 'available' | 'coming-soon'>('all')
 function matches(text: string) { return text.toLowerCase().includes(search.value.trim().toLowerCase()) }
 const visibleProviders = computed(() => availability.value === 'coming-soon' ? [] : providers.filter(provider => matches(`${names[provider]} ${coverage[provider]} ${permissions[provider]}`)))
 const visiblePlannedProviders = computed(() => availability.value === 'available' ? [] : plannedProviders.filter(provider => matches(`${provider.name} ${provider.coverage} ${provider.setup}`)))
-const statuses = ref<ConnectionStatuses>()
+const statuses = ref<ConnectionStatuses | undefined>(props.initialStatuses ? { ...props.initialStatuses } : undefined)
 const loading = ref(false)
 const busy = ref<ConnectionProvider>()
 const error = ref('')
@@ -112,7 +112,7 @@ async function disconnect(provider: ConnectionProvider) {
   catch (cause) { fail(cause) }
   finally { clear(provider); busy.value = undefined }
 }
-onMounted(reload)
+onMounted(() => { if (statuses.value) emit('loaded', statuses.value); else void reload() })
 onUnmounted(() => providers.forEach(clear))
 </script>
 

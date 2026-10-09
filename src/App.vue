@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import SubscriptionForm from './components/SubscriptionForm.vue'
 import InfrastructurePanel from './components/InfrastructurePanel.vue'
 import ConnectionsPanel from './components/ConnectionsPanel.vue'
@@ -10,19 +10,33 @@ import ServiceDetail from './components/ServiceDetail.vue'
 import SpendingTimeline from './components/SpendingTimeline.vue'
 import type { ServiceSelection } from './domain/service-selection'
 import { nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
-import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost-feed'
+import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
-import type { ConnectionStatuses } from './lib/connection-api'
-import type { HostingerDiscovery as HostingerState } from './lib/hostinger-api'
+import { fetchConnections, type ConnectionStatuses } from './lib/connection-api'
+import { readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
+const costFeedResolved = ref(false)
+const costFeedLoaded = ref(false)
+const connectionStatusesResolved = ref(false)
+const hostingerStateResolved = ref(false)
 const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
 const hostinger = ref<InstanceType<typeof HostingerDiscovery>>()
 const connectionStatuses = ref<ConnectionStatuses>()
 const hostingerState = ref<HostingerState>()
-const currentSection = ref(window.location.hash.slice(1) || 'overview')
+const router = useRouter()
+const route = router.currentRoute
+const routeSections: Record<string, string> = { '/': 'overview', '/services': 'services', '/connections': 'connections', '/history': 'history' }
+const currentSection = computed(() => routeSections[route.value.path] ?? 'overview')
+const sectionMeta = computed(() => ({
+  overview: { title: 'Overview', subtitle: 'Know what you pay. See what’s coming.', eyebrow: 'Your costs, in one place' },
+  services: { title: 'Services', subtitle: 'Manage fixed renewals and explore provider costs.', eyebrow: 'Everything you track' },
+  connections: { title: 'Connections', subtitle: 'Connect providers to keep billing data up to date.', eyebrow: 'Private provider access' },
+  history: { title: 'History', subtitle: 'Review past charges, forecasts and renewals.', eyebrow: 'Your saved observations' },
+}[currentSection.value as 'overview' | 'services' | 'connections' | 'history']))
+const mainContent = ref<HTMLElement>()
 const subscriptions = ref<StoredSubscription[]>([])
 const storageError = ref<string | null>(null)
 const loading = ref(true)
@@ -36,25 +50,78 @@ async function reloadLedger() {
   catch (cause) { storageError.value = cause instanceof Error ? cause.message : 'Subscriptions could not be loaded. Reload before making changes.' }
   finally { loading.value = false }
 }
-function syncCurrentSection() { currentSection.value = window.location.hash.slice(1) || 'overview' }
-onMounted(() => { void reloadLedger(); window.addEventListener('hashchange', syncCurrentSection) })
+const legacyPaths: Record<string, string> = { overview: '/', subscriptions: '/services', connections: '/connections', history: '/history', infrastructure: '/services', 'hostinger-discovery': '/services' }
+function normalizeLegacyHash(hash = route.value.hash) {
+  const section = hash.slice(1) || window.location.hash.slice(1)
+  if (section && legacyPaths[section]) void router.replace({ path: legacyPaths[section]!, hash: '' })
+}
+watch(() => route.value.hash, hash => { if (hash) normalizeLegacyHash(hash) })
+onMounted(() => {
+  void reloadLedger()
+  void fetchCostFeed('/api/costs').then(setCostFeed).catch(() => {}).finally(() => { costFeedResolved.value = true })
+  void fetchConnections().then(statuses => { connectionStatuses.value = statuses }).catch(() => {}).finally(() => { connectionStatusesResolved.value = true })
+  void readHostingerDiscovery().then(state => { hostingerState.value = state }).catch(() => {}).finally(() => { hostingerStateResolved.value = true })
+  normalizeLegacyHash(route.value.hash)
+  if (!routeSections[route.value.path]) void router.replace('/')
+})
+watch(currentSection, async () => { await nextTick(); mainContent.value?.focus() })
 const notice = ref('')
 const exportError = ref('')
 const today = ref(new Date().toISOString().slice(0, 10))
 const timer = window.setInterval(() => { today.value = new Date().toISOString().slice(0, 10) }, 60_000)
-onUnmounted(() => { window.clearInterval(timer); window.removeEventListener('hashchange', syncCurrentSection) })
+onUnmounted(() => { window.clearInterval(timer) })
 const showForm = ref(false)
 const editing = ref<StoredSubscription>()
 const search = ref('')
 const statusFilter = ref('all')
 const serviceSelection = ref<ServiceSelection | null>(null)
 let lastDetailTrigger: HTMLElement | null = null
+const detailOpenedFromScreen = ref(false)
+const detailProviders = new Set(['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger', 'github'])
+function selectionRouteKey(selection: ServiceSelection) {
+  return `${selection.kind}:${encodeURIComponent(selection.kind === 'subscription' ? selection.id : selection.provider)}`
+}
+function selectionFromRoute(value: unknown): ServiceSelection | null {
+  if (typeof value !== 'string') return null
+  const separator = value.indexOf(':')
+  if (separator < 0) return null
+  const kind = value.slice(0, separator)
+  let id: string
+  try { id = decodeURIComponent(value.slice(separator + 1)) } catch { return null }
+  if (kind === 'subscription' && id) return { kind, id }
+  if (kind === 'provider' && detailProviders.has(id)) return { kind, provider: id as CostProvider | 'hostinger' | 'github' }
+  return null
+}
+watch(() => route.value.query.detail, async value => {
+  const selection = selectionFromRoute(value)
+  if (selection) { serviceSelection.value = selection; return }
+  if (serviceSelection.value) {
+    serviceSelection.value = null
+    await nextTick()
+    lastDetailTrigger?.focus()
+    lastDetailTrigger = null
+  }
+  detailOpenedFromScreen.value = false
+}, { immediate: true })
 function openServiceDetails(selection: ServiceSelection, event?: Event) {
   lastDetailTrigger = event?.currentTarget instanceof HTMLElement ? event.currentTarget : document.activeElement instanceof HTMLElement ? document.activeElement : null
-  serviceSelection.value = selection
+  const detail = selectionRouteKey(selection)
+  if (route.value.query.detail === detail) { serviceSelection.value = selection; return }
+  detailOpenedFromScreen.value = true
+  void router.push({ query: { ...route.value.query, detail } })
 }
 function openProviderDetails(provider: CostProvider | 'hostinger' | 'github', event?: Event) { openServiceDetails({ kind: 'provider', provider }, event) }
 async function closeServiceDetails() {
+  if (route.value.query.detail) {
+    if (detailOpenedFromScreen.value) {
+      detailOpenedFromScreen.value = false
+      await router.back()
+    } else {
+      const { detail: _, ...query } = route.value.query
+      await router.replace({ query })
+    }
+    return
+  }
   serviceSelection.value = null
   await nextTick()
   lastDetailTrigger?.focus()
@@ -173,24 +240,34 @@ function downloadSubscriptions() {
   }
 }
 async function reloadFinancialViews() {
-  await Promise.allSettled([reloadLedger(), infrastructure.value?.reload(), hostinger.value?.reload()])
+  const reloadCosts = async () => {
+    if (infrastructure.value) await infrastructure.value.reload()
+    else setCostFeed(await fetchCostFeed('/api/costs'))
+  }
+  const reloadHostinger = async () => {
+    if (hostinger.value) await hostinger.value.reload()
+    else hostingerState.value = await readHostingerDiscovery()
+  }
+  await Promise.allSettled([reloadLedger(), reloadCosts(), reloadHostinger()])
 }
 function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuses.value = statuses }
+function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costFeedLoaded.value = true }
 
 </script>
 
 <template>
-  <a class="skip-link" href="#overview">Skip to dashboard</a>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar">
-      <a class="brand" href="#overview" aria-label="StackDues"><span class="brand-mark" aria-hidden="true">S</span><span aria-hidden="true">tackDues</span></a>
+      <NuxtLink class="brand" to="/" aria-label="StackDues"><span class="brand-mark" aria-hidden="true">S</span><span aria-hidden="true">tackDues</span></NuxtLink>
       <p class="workspace-label">Personal workspace</p>
-      <nav aria-label="Primary"><a href="#overview" :aria-current="currentSection === 'overview' ? 'location' : undefined">Overview</a><a href="#subscriptions" :aria-current="currentSection === 'subscriptions' ? 'location' : undefined">Subscriptions <span class="nav-count">{{ subscriptions.length }}</span></a><a href="#connections" :aria-current="currentSection === 'connections' ? 'location' : undefined">Connections</a><a href="#history" :aria-current="currentSection === 'history' ? 'location' : undefined">History</a></nav>
+      <nav aria-label="Primary"><NuxtLink to="/" :aria-current="currentSection === 'overview' ? 'page' : undefined">Overview</NuxtLink><NuxtLink to="/services" :aria-current="currentSection === 'services' ? 'page' : undefined">Services <span class="nav-count">{{ subscriptions.length }}</span></NuxtLink><NuxtLink to="/connections" :aria-current="currentSection === 'connections' ? 'page' : undefined">Connections</NuxtLink><NuxtLink to="/history" :aria-current="currentSection === 'history' ? 'page' : undefined">History</NuxtLink></nav>
       <div class="sidebar-note"><span class="local-indicator" aria-hidden="true"></span><strong>Private to your account</strong><p>Fixed subscriptions are saved to your account and available across devices.</p></div>
     </aside>
-    <main id="overview" tabindex="-1">
-      <header class="page-header"><div><p class="eyebrow">Your costs, in one place</p><h1>Overview<span class="heading-period">.</span></h1><p class="muted">Know what you pay. See what’s coming.</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><div class="header-actions"><a class="primary-button" href="#connections">{{ hasConfiguredProvider ? 'Manage connections' : 'Connect a provider' }}</a><button class="secondary-button" :disabled="blocked" @click="openForm()">Add manually</button></div></header>
+    <main id="main-content" ref="mainContent" tabindex="-1">
+      <header class="page-header"><div><p class="eyebrow">{{ sectionMeta.eyebrow }}</p><h1>{{ sectionMeta.title }}<span class="heading-period">.</span></h1><p class="muted">{{ sectionMeta.subtitle }}</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><div class="header-actions"><NuxtLink v-if="currentSection !== 'connections'" class="primary-button" to="/connections">{{ hasConfiguredProvider ? 'Manage connections' : 'Connect a provider' }}</NuxtLink><button v-if="currentSection === 'services' || currentSection === 'overview'" class="secondary-button" :disabled="blocked" @click="openForm()">Add manually</button></div></header>
       <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload subscriptions</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
+      <template v-if="currentSection === 'overview'">
       <section v-if="loaded" class="provider-overview" aria-labelledby="provider-overview-title">
         <div class="section-header"><div><p class="eyebrow">Connected providers and fixed renewals</p><h2 id="provider-overview-title">Your spending</h2></div></div>
         <div class="provider-overview-grid">
@@ -261,22 +338,25 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
         <p class="metric-note">Trends compare only aligned periods from the same provider and currency. Positive service charges are ranked; credits remain in actual totals.</p>
       </section>
       <p v-if="loaded" class="summary-footnote">Currencies are kept separate. Renewal windows include today · {{ dateLabel(today) }} UTC.</p>
-      <div v-if="loaded" class="content-columns single-column">
-        <SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" @select="openServiceDetails($event)" />
-      </div>
+      </template>
+      <section v-if="currentSection === 'services'" id="services" class="services-screen">
       <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
         <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No manual subscriptions yet</h3><p>Connect a provider above to sync your costs, or add services such as Bitwarden Premium and ChatGPT Plus yourself.</p></div>
         <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: item.id }, $event)"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></button></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
-      <LegacyImport :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
-      <ConnectionsPanel :cost-feed="costFeed" :hostinger-sync="hostingerState?.sync" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" />
-      <HostingerDiscovery ref="hostinger" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" @loaded="hostingerState = $event" />
-      <InfrastructurePanel ref="infrastructure" :fixed-totals="totals" :configured-providers="configuredMeteredProviders" :today="today" @loaded="costFeed = $event" @details="openProviderDetails($event)" />
-      <CostHistory :snapshots="costFeed.snapshots" />
+      <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
+      <KeepAlive><HostingerDiscovery v-if="currentSection === 'services' && hostingerStateResolved" ref="hostinger" :initial="hostingerState" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" @loaded="hostingerState = $event" /></KeepAlive>
+      <KeepAlive><InfrastructurePanel v-if="currentSection === 'services' && costFeedResolved && hostingerStateResolved" ref="infrastructure" :initial-feed="costFeed" :has-initial-feed="costFeedLoaded" :fixed-totals="totals" :configured-providers="configuredMeteredProviders" :today="today" @loaded="setCostFeed" @details="openProviderDetails($event)" /></KeepAlive>
+      </section>
+      <KeepAlive><ConnectionsPanel v-if="currentSection === 'connections' && connectionStatusesResolved" :initial-statuses="connectionStatuses" :cost-feed="costFeed" :hostinger-sync="hostingerState?.sync" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" /></KeepAlive>
+      <section v-if="currentSection === 'history'" class="history-screen">
+        <div class="content-columns single-column"><SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" @select="openServiceDetails($event)" /></div>
+        <CostHistory :snapshots="costFeed.snapshots" />
+      </section>
       <footer class="app-footer"><span>StackDues</span><p>Fixed subscriptions are saved privately to your account. Existing browser data remains untouched.</p></footer>
     </main>
   </div>
   <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-error="storageError" :saving="busy" :aria-busy="busy" @save="save" @close="showForm = false" />
-  <ServiceDetail v-if="serviceSelection" :selection="serviceSelection" :feed="costFeed" :subscriptions="subscriptions" :today="today" :hostinger-sync="hostingerState?.sync" :hostinger-rows="hostingerState?.subscriptions" @close="closeServiceDetails" @edit="editDetailedSubscription" />
+  <ServiceDetail v-if="serviceSelection" :selection="serviceSelection" :feed="costFeed" :subscriptions="subscriptions" :subscriptions-loaded="loaded" :today="today" :hostinger-sync="hostingerState?.sync" :hostinger-rows="hostingerState?.subscriptions" @close="closeServiceDetails" @edit="editDetailedSubscription" />
 </template>

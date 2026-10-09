@@ -25,7 +25,10 @@ test('Worker protects app/assets/API and supports single-owner registration, log
   try {
     const deadline = Date.now() + 40_000
     while (!output.includes('Ready on')) { if (worker.exitCode !== null || Date.now() > deadline) throw new Error(`Worker startup failed: ${output}`); await new Promise(resolve => setTimeout(resolve, 100)) }
-    assert.equal((await request('/')).status, 303)
+    const document = (path: string, cookie?: string) => request(path, { headers: { Accept: 'text/html', ...(cookie ? { Cookie: cookie } : {}) } })
+    assert.equal((await document('/')).status, 303)
+    for (const path of ['/services', '/services/', '/connections', '/history']) assert.equal((await document(path)).status, 303, path)
+    assert.equal((await document('/unknown-route')).status, 401)
     for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
     for (const [method, path] of [
       ['POST', '/api/subscriptions?import=1'],
@@ -48,6 +51,11 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     const dashboard = await request('/', { headers: { Cookie: cookie } })
     assert.equal(dashboard.status, 200)
     assert.match(await dashboard.text(), /StackDues/)
+    for (const path of ['/services', '/services/', '/connections', '/history']) {
+      const screen = await document(path, cookie)
+      assert.equal(screen.status, 200, path)
+      assert.match(await screen.text(), /StackDues/)
+    }
     assert.equal((await request('/favicon.svg', { headers: { Cookie: cookie } })).status, 200)
     assert.equal((await request('/api/costs', { headers: { Cookie: cookie } })).status, 200)
     const item = { id: 'api-bitwarden', name: 'Bitwarden', billingType: 'fixed', amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-10-08', status: 'active' }
