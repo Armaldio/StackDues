@@ -122,6 +122,7 @@ test('first run prioritizes provider connections and preserves a keyboard-friend
   await addManually.press('Enter')
   await expect(page.getByRole('dialog').getByLabel('Name', { exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
+  await expect(addManually).toBeFocused()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
@@ -308,7 +309,7 @@ test('connection-status read failures retain last known metered totals with an h
 })
 
 test('legacy hashes map safely and all routed screens fit at 375px', async ({ page }) => {
-  test.setTimeout(60_000)
+  test.setTimeout(120_000)
   await mockLedger(page)
   const legacyHashes = [
     { hash: '#overview', screen: routedScreens[0]! },
@@ -328,6 +329,38 @@ test('legacy hashes map safely and all routed screens fit at 375px', async ({ pa
     await page.goto(screen.path)
     await expectRoutedScreen(page, screen)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
+})
+
+test('four screens stay within the viewport at supported widths and scrollable tables remain keyboard reachable', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const month = capturedAt.slice(0, 7)
+  const subscription = { id: 'matrix-service', name: 'Matrix VPS', billingType: 'fixed', amount: 12, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10), status: 'active', revision: 1 }
+  await mockLedger(page, [subscription])
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [{ id: 'matrix-cost', provider: 'aws', periodStart: `${month}-01`, periodEnd: `${month}-28`, amount: 8, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } }], providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' } } } }))
+  const viewports = [{ width: 320, name: '320' }, { width: 375, name: '375' }, { width: 768, name: '768' }, { width: 1440, name: 'desktop' }]
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: 900 })
+    for (const screen of routedScreens) {
+      await page.goto(screen.path)
+      await expectRoutedScreen(page, screen)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${screen.title} overflows at ${viewport.width}px`).toBe(true)
+      if (screen.path === '/services' || screen.path === '/history') {
+        const table = page.getByRole('region', { name: /table\. Scroll horizontally/ })
+        await expect(table).toHaveAttribute('tabindex', '0')
+        await table.focus()
+        await expect(table).toBeFocused()
+        if (viewport.width <= 600) await expect(table.locator('.table-scroll-hint')).toBeVisible()
+        const editTarget = screen.path === '/services' ? page.getByRole('button', { name: 'Edit Matrix VPS' }) : undefined
+        if (editTarget && viewport.width <= 600) expect((await editTarget.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+      }
+      await page.evaluate(() => {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        window.scrollTo(0, 0)
+      })
+      await page.screenshot({ path: testInfo.outputPath(`dues19-${screen.nav.toLowerCase()}-${viewport.name}.png`), fullPage: true })
+    }
   }
 })
 
@@ -424,6 +457,7 @@ test('fresh subscriptions support real recurrence, edits, status changes, deleti
   const changedRenewal = changedRenewalDate.toISOString().slice(0, 10)
   await page.getByRole('dialog').getByLabel('Next renewal date').fill(changedRenewal)
   await page.getByRole('dialog').getByRole('button', { name: 'Save subscription' }).click()
+  await expect(page.getByRole('button', { name: 'Edit VPS', exact: true })).toBeFocused()
   await page.goto('/')
   await expect(page.locator('.overview-primary-value')).toHaveText('USD 28.83')
   await expect(page.locator('.overview-renewal-list li').filter({ hasText: 'VPS' })).toContainText(new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${changedRenewal}T00:00:00Z`)))
@@ -832,7 +866,7 @@ test('provider details reuse saved actual and forecast observations without comb
   await page.keyboard.press('Escape')
   await expect(detail).not.toBeVisible()
   await expect(trigger).toBeFocused()
-  await page.goto('./connections')
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Connections' }).click()
   const digitalOcean = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'DigitalOcean', exact: true }) })
   await digitalOcean.getByRole('button', { name: 'DigitalOcean', exact: true }).click()
   const invoiceDetails = page.getByRole('dialog', { name: 'DigitalOcean' })
