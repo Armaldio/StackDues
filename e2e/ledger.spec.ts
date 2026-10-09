@@ -558,6 +558,66 @@ test('manual subscription details show the saved renewal and allow editing; GitH
   await expect(githubDetails).not.toContainText('USD 0.00')
 })
 
+test('spending timeline filters 30/90/365-day windows without mixing renewals, actuals, forecasts, or currencies', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const dateOffset = (days: number) => { const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const periodStart = `${today.slice(0, 7)}-01`
+  const nextMonth = new Date(`${periodStart}T00:00:00Z`); nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
+  const periodEnd = nextMonth.toISOString().slice(0, 10)
+  const manual = { id: 'timeline-manual', name: 'Manual Pro plan', billingType: 'fixed', amount: 80, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: dateOffset(5), status: 'active', revision: 1 }
+  const hostinger = { id: 'timeline-hostinger', name: 'Hostinger Server', provider: 'Hostinger', billingType: 'fixed', amount: 120, currency: 'USD', recurrenceInterval: 12, recurrenceUnit: 'month', nextRenewalAt: dateOffset(12), status: 'active', revision: 1 }
+  await mockLedger(page, [manual, hostinger])
+  const oldStart = dateOffset(-80), oldEnd = dateOffset(-40)
+  const oldCaptured = new Date(`${dateOffset(-35)}T12:00:00Z`).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const olderStart = dateOffset(-200), olderEnd = dateOffset(-150)
+  const olderCaptured = new Date(`${dateOffset(-145)}T12:00:00Z`).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [
+    { id: 'timeline-aws', provider: 'aws', periodStart, periodEnd, amount: 5, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current', breakdown: [{ service: 'Compute', amount: 5, currency: 'USD' }] } },
+    { id: 'timeline-aws-forecast', provider: 'aws', periodStart, periodEnd, amount: 12, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
+    { id: 'timeline-cloudflare-credit', provider: 'cloudflare', periodStart: dateOffset(-10), periodEnd: dateOffset(20), amount: -1.5, currency: 'USD', kind: 'actual', capturedAt, metadata: { scope: 'billing-period-to-date' } },
+    { id: 'timeline-cloudflare-old', provider: 'cloudflare', periodStart: oldStart, periodEnd: oldEnd, amount: 18, currency: 'EUR', kind: 'actual', capturedAt: oldCaptured, metadata: { period: 'current' } },
+    { id: 'timeline-cloudflare-older', provider: 'cloudflare', periodStart: olderStart, periodEnd: olderEnd, amount: 7, currency: 'EUR', kind: 'actual', capturedAt: olderCaptured, metadata: { period: 'previous-month' } },
+    { id: 'timeline-do-invoice', provider: 'digitalocean', periodStart, periodEnd, amount: 24.9, currency: 'USD', kind: 'actual', capturedAt, metadata: { scope: 'finalized-invoice-total' } },
+  ], providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'synced', lastSyncedAt: capturedAt }, openai: { status: 'not-configured' }, digitalocean: { status: 'synced', lastSyncedAt: capturedAt } } } }))
+  await page.setViewportSize({ width: 320, height: 850 })
+  await page.goto('./')
+  const timeline = page.locator('#timeline')
+  await expect(timeline.getByRole('heading', { name: 'Spending timeline' })).toBeVisible()
+  const renewals = timeline.locator('.timeline-lane').nth(0)
+  const actuals = timeline.locator('.timeline-lane').nth(1)
+  const forecasts = timeline.locator('.timeline-lane').nth(2)
+  await expect(renewals).toContainText('Manual Pro plan')
+  await expect(renewals).toContainText('Hostinger Server')
+  await expect(actuals).toContainText('-USD 1.50')
+  await expect(actuals).toContainText('USD 24.90')
+  await expect(actuals).not.toContainText('18.00')
+  await expect(forecasts).toContainText('USD 12.00')
+  await expect(renewals).not.toContainText('USD 12.00')
+  await timeline.getByRole('button', { name: '90 days' }).click()
+  await expect(actuals).toContainText('EUR 18.00')
+  await expect(actuals).not.toContainText('EUR 7.00')
+  await timeline.getByRole('button', { name: '365 days' }).click()
+  await expect(actuals).toContainText('EUR 7.00')
+  const filters = timeline.locator('.timeline-filters select')
+  await filters.nth(0).selectOption('digitalocean')
+  await expect(actuals).toContainText('USD 24.90')
+  await expect(actuals).not.toContainText('-USD 1.50')
+  await filters.nth(0).selectOption('all')
+  await filters.nth(1).selectOption('forecast')
+  await expect(forecasts).toContainText('USD 12.00')
+  await expect(renewals).toContainText('No renewals match these filters')
+  await filters.nth(1).selectOption('all')
+  await filters.nth(2).selectOption('EUR')
+  await expect(renewals).toContainText('Manual Pro plan')
+  await expect(actuals).toContainText('EUR 18.00')
+  await filters.nth(2).selectOption('all')
+  await timeline.getByRole('button', { name: /Manual Pro plan/ }).click()
+  const detail = page.getByRole('dialog', { name: 'Manual Pro plan' })
+  await expect(detail).toContainText('EUR 80.00')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
 test('cost history defaults to latest observations, filters currencies and periods, and reveals older captures on demand', async ({ page }) => {
   const capturedAt = new Date().toISOString()
   const snapshots: Array<{ id: string; provider: string; periodStart: string; periodEnd: string; amount: number; currency: string; kind: string; capturedAt: string; metadata: Record<string, string> }> = Array.from({ length: 31 }, (_, index) => {
@@ -672,7 +732,9 @@ test('stale Hostinger commitments remain visible but are omitted from upcoming c
   await page.goto('./')
   await expect(page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Hostinger/ }) })).toContainText('USD 10.00')
   await expect(page.locator('.provider-overview')).toContainText('omitted from upcoming-charge totals')
-  await expect(page.locator('.renewals-panel')).toContainText('Nothing coming up')
+  const renewalLane = page.locator('#timeline .timeline-lane').first()
+  await expect(renewalLane).toContainText('No active renewal is scheduled in the next 30 days')
+  await expect(renewalLane.locator('.renewal-timeline-list')).toHaveCount(0)
 })
 
 test('Hostinger renewal discovery stays out of totals until linked or added and preserves existing values', async ({ page }) => {

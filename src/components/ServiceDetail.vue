@@ -2,13 +2,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { latestCostSnapshots, type CostBreakdown, type CostProvider, type CostSnapshot } from '../domain/usage-costs'
 import { overviewInsights } from '../domain/overview-insights'
+import type { ServiceSelection } from '../domain/service-selection'
 import { nextRenewalOnOrAfter, normalizeCost, type Subscription } from '../domain/subscriptions'
 import { isProviderStale, type CostFeed } from '../lib/cost-feed'
 import type { HostingerDiscovery } from '../lib/hostinger-api'
-
-export type ServiceSelection =
-  | { kind: 'provider'; provider: CostProvider | 'hostinger' | 'github' }
-  | { kind: 'subscription'; id: string }
 
 const props = defineProps<{
   selection: ServiceSelection
