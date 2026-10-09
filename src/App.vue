@@ -9,6 +9,7 @@ import LegacyImport from './components/LegacyImport.vue'
 import { nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription, type Renewal } from './domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals } from './domain/usage-costs'
+import { overviewInsights } from './domain/overview-insights'
 import type { ConnectionStatuses } from './lib/connection-api'
 import type { HostingerDiscovery as HostingerState } from './lib/hostinger-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
@@ -55,6 +56,7 @@ const providerUsage = computed(() => ({
   aws: usageTotals(meterSnapshots.value, today.value, ['aws']),
   cloudflare: usageTotals(meterSnapshots.value, today.value, ['cloudflare']),
 }))
+const spendingInsights = computed(() => overviewInsights(costFeed.value.snapshots))
 const hostingerLinkedIds = computed(() => new Set((hostingerState.value?.subscriptions ?? []).map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const hostingerFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider === 'Hostinger' || hostingerLinkedIds.value.has(item.id))))
 const manualFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider !== 'Hostinger' && !hostingerLinkedIds.value.has(item.id))))
@@ -81,6 +83,11 @@ const due90 = computed(() => chargeTotals(upcomingRenewals(confirmedSubscription
 const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
 function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
+function periodDescription(provider: 'aws' | 'cloudflare', currency: string) {
+  const periods = currentCostSnapshots(costFeed.value).filter(row => row.provider === provider && row.currency === currency && row.kind === 'actual' && (row.metadata?.period === 'current' || row.metadata?.scope === 'billing-period-to-date'))
+  if (!periods.length) return 'Unavailable'
+  return [...new Set(periods.map(row => `${row.periodStart}–${row.periodEnd}${row.metadata?.reportedThrough ? ` · reported through ${String(row.metadata.reportedThrough).slice(0, 10)}` : ''}`))].join(', ')
+}
 function recurrence(item: Subscription) { return `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` }
 function openForm(item?: StoredSubscription) { if (blocked.value) return; editing.value = item; showForm.value = true }
 function mutationError(cause: unknown) { storageError.value = cause instanceof Error ? cause.message : 'Changes could not be confirmed. Reload before making changes.' }
@@ -163,11 +170,12 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
           <article v-for="provider in meteredProviders" :key="provider" class="provider-overview-card">
             <h3>{{ provider === 'aws' ? 'AWS' : 'Cloudflare' }} <span class="metric-note">Metered usage</span></h3>
             <template v-if="providerUsage[provider].length">
-              <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>Actual charges to date · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month forecast</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : 'Forecast unavailable' }}</dd></div></dl>
+              <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>Actual charges to date · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month forecast</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : 'Forecast unavailable' }}</dd></div><div><dt>Reported period</dt><dd>{{ periodDescription(provider, usage.currency) }}</dd></div></dl>
             </template>
             <p v-else class="metric-note">{{ connectionStatuses?.[provider].configured ? 'Connected; billing observations are not available yet.' : 'Not connected' }}</p>
             <p v-if="costFeed.providers[provider].status === 'error'" class="feed-warning" role="status">Sync failed; last known charges remain visible.</p>
             <p v-else-if="isProviderStale(costFeed.providers[provider])" class="feed-warning" role="status">Last known charges are stale.</p>
+            <p v-if="costFeed.providers[provider].lastSyncedAt" class="metric-note">Last successful sync · {{ new Date(costFeed.providers[provider].lastSyncedAt!).toLocaleString() }}</p>
           </article>
           <article class="provider-overview-card">
             <h3>Hostinger <span class="metric-note">Fixed recurring commitments</span></h3>
@@ -204,6 +212,21 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
           </article>
         </div>
         <p v-else class="quiet-empty">Add a fixed subscription or connect a metered provider to see tracked spending.</p>
+      </section>
+      <section v-if="loaded" class="spending-insights" aria-labelledby="spending-insights-title">
+        <div class="section-header"><div><p class="eyebrow">Provider observations</p><h2 id="spending-insights-title">Cost drivers &amp; trend</h2></div></div>
+        <div v-if="spendingInsights.length" class="insight-grid">
+          <article v-for="insight in spendingInsights" :key="`${insight.provider}-${insight.currency}`" class="insight-card">
+            <h3>{{ insight.provider === 'aws' ? 'AWS' : 'Cloudflare' }} <span class="metric-note">{{ insight.currency }} actual charges</span></h3>
+            <p class="insight-total">{{ money(insight.actual, insight.currency) }}</p>
+            <p v-if="insight.previousComparable !== null && insight.changePercent !== null" class="metric-note">{{ money(insight.previousComparable, insight.currency) }} in the aligned prior period · {{ insight.changePercent > 0 ? '+' : '' }}{{ insight.changePercent.toFixed(1) }}%</p>
+            <p v-else class="metric-note">Not enough comparable history for a trend.</p>
+            <ul v-if="insight.drivers.length" class="insight-drivers"><li v-for="driver in insight.drivers.slice(0, 3)" :key="driver.service"><span>{{ driver.service }}</span><strong>{{ money(driver.amount, insight.currency) }}</strong></li></ul>
+            <p v-else class="metric-note">Service-level cost detail is unavailable.</p>
+          </article>
+        </div>
+        <p v-else class="quiet-empty">Provider cost insights will appear after a successful billing sync.</p>
+        <p class="metric-note">Trends compare only aligned periods from the same provider and currency. Positive service charges are ranked; credits remain in actual totals.</p>
       </section>
       <p v-if="loaded" class="summary-footnote">Currencies are kept separate. Renewal windows include today · {{ dateLabel(today) }} UTC.</p>
       <div v-if="loaded" class="content-columns single-column">

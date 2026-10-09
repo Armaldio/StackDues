@@ -89,6 +89,16 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .tracked-spending-card dt { color: var(--muted); }
 .tracked-spending-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .tracked-spending-card .combined-total { font-size: .82rem; font-weight: 600; }
+.spending-insights { margin: 0 0 2.5rem; }
+.spending-insights .section-header { margin-bottom: .75rem; }
+.insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: .85rem; }
+.insight-card { min-width: 0; padding: 1.1rem 1.2rem; border: 1px solid var(--line); background: var(--surface); }
+.insight-card h3 { font-size: .95rem; }
+.insight-card h3 .metric-note { display: block; font-weight: 400; }
+.insight-total { margin-top: .6rem; font: 500 1.5rem var(--mono); font-variant-numeric: tabular-nums; }
+.insight-drivers { list-style: none; padding: 0; margin: .9rem 0 0; border-top: 1px solid var(--line); }
+.insight-drivers li { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .78rem; }
+.insight-drivers strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .content-columns { display: grid; grid-template-columns: 1.4fr 1fr; gap: 2rem; margin-bottom: 2.5rem; align-items: start; }
 .section-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
 .section-header .eyebrow { font-size: .65rem; margin-bottom: .4rem; }
