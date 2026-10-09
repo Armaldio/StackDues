@@ -388,6 +388,33 @@ test('cost history defaults to latest observations, filters currencies and perio
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
+test('overview shows comparable provider trends, cost drivers, billing periods and freshness on mobile', async ({ page }) => {
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const now = new Date()
+  const currentStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+  const priorStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
+  const date = (value: Date) => value.toISOString().slice(0, 10)
+  const currentEnd = new Date(currentStart); currentEnd.setUTCDate(currentEnd.getUTCDate() + 7)
+  const priorEnd = new Date(priorStart); priorEnd.setUTCDate(priorEnd.getUTCDate() + 7)
+  const snapshots = [
+    { id: 'aws-current', provider: 'aws', periodStart: date(currentStart), periodEnd: date(currentEnd), amount: 24, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current', breakdown: [{ service: 'EC2', amount: 18, currency: 'USD' }, { service: 'S3', amount: 6, currency: 'USD' }] } },
+    { id: 'aws-prior', provider: 'aws', periodStart: date(priorStart), periodEnd: date(priorEnd), amount: 20, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'previous-comparable' } },
+  ]
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots, providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' } } } }))
+  await mockLedger(page, [], false)
+  await page.setViewportSize({ width: 320, height: 900 })
+  await page.goto('./')
+  await expect(page.getByRole('heading', { name: 'Overview.' })).toBeVisible()
+  const insights = page.getByRole('region', { name: 'Cost drivers & trend' })
+  await expect(insights).toContainText('AWS')
+  await expect(insights).toContainText('+20.0%')
+  await expect(insights).toContainText('EC2')
+  await expect(insights).toContainText('USD 18.00')
+  await expect(page.locator('.provider-overview-card').filter({ hasText: 'Metered usage' }).first()).toContainText(`${date(currentStart)}–${date(currentEnd)}`)
+  await expect(page.locator('.provider-overview-card').filter({ hasText: 'Metered usage' }).first()).toContainText('Last successful sync')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
 test('connecting Hostinger automatically discovers subscriptions without pressing Sync', async ({ page }) => {
   const ledger = await mockLedger(page)
   let configured = false, syncCalls = 0
