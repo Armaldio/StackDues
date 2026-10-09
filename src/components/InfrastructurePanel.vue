@@ -7,7 +7,7 @@ import { currentCostSnapshots, emptyCostFeed, parseCostFeed, isProviderStale, ty
 import { ConnectionApiError, refreshProviders } from '../lib/connection-api'
 
 const props = defineProps<{ fixedTotals: CurrencyTotal[]; configuredProviders: CostProvider[]; today: string }>()
-const emit = defineEmits<{ loaded: [feed: CostFeed] }>()
+const emit = defineEmits<{ loaded: [feed: CostFeed]; details: [provider: CostProvider] }>()
 const feed = ref(emptyCostFeed())
 const loading = ref(false)
 const error = ref('')
@@ -118,7 +118,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
     </div>
     <div class="provider-grid">
       <article v-for="provider in providers" :key="provider" class="provider-panel">
-        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3>{{ name(provider) }}</h3></div><span class="status-label" :class="feed.providers[provider].status">{{ feed.providers[provider].status === 'not-configured' ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
+        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ name(provider) }}</button></h3></div><span class="status-label" :class="feed.providers[provider].status">{{ feed.providers[provider].status === 'not-configured' ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
         <p v-if="feed.providers[provider].error" class="feed-warning" role="status">{{ feed.providers[provider].error }}</p>
         <p v-if="isProviderStale(feed.providers[provider])" class="feed-warning">Data is over 36 hours old. The last successful observations are retained.</p>
         <template v-if="current(provider).length">
