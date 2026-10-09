@@ -28,3 +28,125 @@ jobs:
       - run: npm run test:aws-worker
       - run: npm run test:e2e
       - run: npm audit --omit=dev --audit-level=high
+
+  deploy-production:
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: stackdues-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify production environment configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "::error::Configure CLOUDFLARE_API_TOKEN as a secret in the production environment."
+            exit 1
+          fi
+          if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+            echo "::error::Configure CLOUDFLARE_ACCOUNT_ID as a variable in the production environment."
+            exit 1
+          fi
+          configured_account_id="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync("wrangler.jsonc", "utf8")).account_id)')"
+          if [[ "$CLOUDFLARE_ACCOUNT_ID" != "$configured_account_id" ]]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID must match the account configured in wrangler.jsonc."
+            exit 1
+          fi
+      - name: Apply pending remote D1 migrations
+        id: migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [[ -z "$latest_main" ]]; then
+            echo "::error::Could not verify the latest main commit; refusing production migration."
+            exit 1
+          fi
+          if [[ "$latest_main" != "$GITHUB_SHA" ]]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping stale commit $GITHUB_SHA; main is now $latest_main."
+            exit 0
+          fi
+          npx wrangler d1 migrations list stackdues --remote
+          latest_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [[ -z "$latest_main" ]]; then
+            echo "::error::Could not recheck the latest main commit; refusing production migration."
+            exit 1
+          fi
+          if [[ "$latest_main" != "$GITHUB_SHA" ]]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping migration for stale commit $GITHUB_SHA; main is now $latest_main."
+            exit 0
+          fi
+          npx wrangler d1 migrations apply stackdues --remote
+          echo "current=true" >> "$GITHUB_OUTPUT"
+      - name: Skip stale commit before Worker deploy
+        id: deploy-guard
+        if: steps.migrations.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [[ -z "$latest_main" ]]; then
+            echo "::error::Could not verify the latest main commit; refusing Worker deployment."
+            exit 1
+          fi
+          if [[ "$latest_main" != "$GITHUB_SHA" ]]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping stale commit $GITHUB_SHA; main is now $latest_main."
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+      - name: Deploy tested Worker commit
+        if: steps.deploy-guard.outputs.current == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run deploy -- --message "StackDues production ${GITHUB_SHA}"
+      - name: Verify anonymous authentication boundary
+        id: auth-smoke
+        if: steps.deploy-guard.outputs.current == 'true'
+        run: node scripts/production-smoke.mjs
+      - name: Publish deployment summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          MIGRATIONS_CURRENT: ${{ steps.migrations.outputs.current }}
+          DEPLOY_CURRENT: ${{ steps.deploy-guard.outputs.current }}
+          DEPLOY_OUTCOME: ${{ steps.deploy-production.outcome }}
+          SMOKE_OUTCOME: ${{ steps.auth-smoke.outcome }}
+        run: |
+          {
+            echo "## StackDues production deployment"
+            echo
+            echo "- Commit: `$GITHUB_SHA`"
+            if [[ "$JOB_STATUS" != "success" ]]; then
+              echo "- Result: failed; inspect this run's step results before retrying."
+            elif [[ "$MIGRATIONS_CURRENT" != "true" ]]; then
+              echo "- Result: skipped because this commit was no longer current on main before migrations."
+            elif [[ "$DEPLOY_CURRENT" != "true" ]]; then
+              echo "- Result: migrations completed; deployment skipped because a newer commit reached main."
+            else
+              echo "- Worker deploy step: $DEPLOY_OUTCOME"
+              echo "- Anonymous auth smoke test: $SMOKE_OUTCOME"
+            fi
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"

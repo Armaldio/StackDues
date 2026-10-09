@@ -40,7 +40,7 @@ D1 stores only the owner's salted PBKDF2-SHA256 hash (100,000 iterations, the Wo
 
 Create the D1 binding, apply `npx wrangler d1 migrations apply stackdues --remote`, configure Worker Secrets through protected stdin/file input, build with `npm run build`, then `npm run deploy`. CI creates only a temporary local D1 database with fake credentials for runtime tests. It never creates an owner account in production or reads billing secrets.
 
-GitHub Actions validates code only and never refreshes billing. The previous Pages refresh/deployment workflow has been removed, and the legacy Pages deployment and scheduled workflow are disabled to remove the alternate public host. Provider credentials are entered in the authenticated interface and encrypted in D1; the independent encryption key lives only in Workers Secrets. Roll back by deploying the previous reviewed commit with the same gate and bindings; D1 data does not roll back with Worker code.
+GitHub Actions validates code only for pull requests. After the quality job passes on `main`, it applies pending remote migrations and deploys the tested Worker commit, then checks the anonymous authentication boundary. Configure the `production` GitHub environment as described in [the deployment runbook](docs/deployment.md); the workflow never uploads Worker secrets. The previous Pages refresh/deployment workflow has been removed, and the legacy Pages deployment and scheduled workflow are disabled to remove the alternate public host. Provider credentials are entered in the authenticated interface and encrypted in D1; the independent encryption key lives only in Workers Secrets. D1 data does not roll back with Worker code.
 
 ## Connections and refresh
 
