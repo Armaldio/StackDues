@@ -14,17 +14,19 @@ const error = ref('')
 const refreshing = ref(false)
 const refreshError = ref('')
 const expired = ref(false)
-const providers: CostProvider[] = ['aws', 'cloudflare', 'openai']
+const providers: CostProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean']
 let feedLoaded = false
 let staleRefreshStarted = false
 const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
-const totals = computed(() => usageTotals(activeSnapshots.value, props.today, connectedProviders.value))
-const latest = computed(() => latestCostSnapshots(activeSnapshots.value).filter(row => row.kind === 'actual' && row.metadata?.period === 'current'))
+const totals = computed(() => usageTotals(activeSnapshots.value, props.today, forecastProviders.value))
+const latest = computed(() => latestCostSnapshots(activeSnapshots.value).filter(row => row.kind === 'actual' && (row.metadata?.period === 'current' || row.metadata?.scope === 'finalized-invoice-total')))
 const connectedProviders = computed(() => providers.filter(provider => feed.value.providers[provider].status !== 'not-configured'))
-const combined = computed(() => trackedSpendingTotals(props.fixedTotals, totals.value, connectedProviders.value, activeSnapshots.value))
+// DigitalOcean reports finalized invoice periods, not a current-month forecast; it must not suppress other providers' projections.
+const forecastProviders = computed(() => connectedProviders.value.filter(provider => provider !== 'digitalocean'))
+const combined = computed(() => trackedSpendingTotals(props.fixedTotals, totals.value, forecastProviders.value, activeSnapshots.value))
 function money(amount: number, currency: string) { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount) }
 function date(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
-function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : provider === 'cloudflare' ? 'Cloudflare' : 'OpenAI API' }
+function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : provider === 'cloudflare' ? 'Cloudflare' : provider === 'openai' ? 'OpenAI API' : 'DigitalOcean' }
 function current(provider: CostProvider): CostSnapshot[] {
   const rows = latest.value.filter(row => row.provider === provider)
   const newest = Math.max(...rows.map(row => Date.parse(row.capturedAt)))
@@ -101,7 +103,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
     <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><div class="provider-refresh-actions"><button type="button" class="secondary-button" :disabled="loading || refreshing" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button><button type="button" class="primary-button" :disabled="loading || refreshing" @click="refresh()">{{ refreshing ? 'Refreshing…' : 'Refresh providers' }}</button></div></div>
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
-    <p class="metric-note refresh-description">Refresh providers fetches new reported costs from connected AWS, Cloudflare and OpenAI API accounts. Reload cost data reads the stored observations.</p>
+    <p class="metric-note refresh-description">Refresh providers fetches reported costs from connected AWS, Cloudflare, OpenAI API and DigitalOcean accounts. DigitalOcean provides finalized invoice totals only; previews, estimates, balances and cash events are not included. Reload cost data reads stored observations.</p>
     <p v-if="error" role="alert" class="feed-warning">{{ error }}</p><p v-if="refreshError" role="alert" class="feed-warning">{{ refreshError }}</p><p v-if="expired"><a href="/login">Sign in</a></p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
@@ -121,7 +123,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
         <p v-if="isProviderStale(feed.providers[provider])" class="feed-warning">Data is over 36 hours old. The last successful observations are retained.</p>
         <template v-if="current(provider).length">
           <div v-for="snapshot in current(provider)" :key="snapshot.id" class="provider-cost">
-            <strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><span>{{ provider === 'cloudflare' ? 'Billing period to date' : provider === 'openai' ? 'Organization-reported API costs · month to date' : 'Month to date' }}</span>
+            <strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><span>{{ provider === 'digitalocean' ? `Finalized invoice total · ${snapshot.periodStart.slice(0, 7)}` : provider === 'cloudflare' ? 'Billing period to date' : provider === 'openai' ? 'Organization-reported API costs · month to date' : 'Month to date' }}</span>
             <p>{{ snapshot.periodStart }} → {{ snapshot.periodEnd }} (end exclusive)</p>
             <p v-if="previous(provider, snapshot.currency)">{{ money(previous(provider, snapshot.currency)!.amount, snapshot.currency) }} in the comparable previous-month period</p>
             <p v-if="forecast(provider, snapshot.currency)">{{ money(forecast(provider, snapshot.currency)!.amount, snapshot.currency) }} whole-month forecast</p>

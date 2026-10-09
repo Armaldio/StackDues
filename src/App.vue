@@ -50,6 +50,7 @@ const hasConfiguredProvider = computed(() => Object.values(connectionStatuses.va
 const totals = computed(() => normalizedTotals(subscriptions.value))
 const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
 const connectedMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
+const connectedBillingProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
 const meteredTotals = computed(() => usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value))
 const trackedTotals = computed(() => trackedSpendingTotals(totals.value, meteredTotals.value, connectedMeteredProviders.value, meterSnapshots.value))
 const providerUsage = computed(() => ({
@@ -61,13 +62,14 @@ const spendingInsights = computed(() => overviewInsights(costFeed.value.snapshot
 const hostingerLinkedIds = computed(() => new Set((hostingerState.value?.subscriptions ?? []).map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const hostingerFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider === 'Hostinger' || hostingerLinkedIds.value.has(item.id))))
 const manualFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider !== 'Hostinger' && !hostingerLinkedIds.value.has(item.id))))
-const configuredMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(provider => connectionStatuses.value?.[provider].configured))
+const configuredMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(provider => connectionStatuses.value?.[provider].configured))
 const meteredProviders = ['aws', 'cloudflare', 'openai'] as const
-function providerName(provider: 'aws' | 'cloudflare' | 'openai') { return provider === 'aws' ? 'AWS' : provider === 'cloudflare' ? 'Cloudflare' : 'OpenAI API' }
+const digitalOceanInvoices = computed(() => meterSnapshots.value.filter(row => row.provider === 'digitalocean' && row.metadata?.scope === 'finalized-invoice-total').sort((a, b) => b.periodStart.localeCompare(a.periodStart)))
+function providerName(provider: 'aws' | 'cloudflare' | 'openai' | 'digitalocean') { return provider === 'aws' ? 'AWS' : provider === 'cloudflare' ? 'Cloudflare' : provider === 'openai' ? 'OpenAI API' : 'DigitalOcean' }
 const meteredWarning = computed(() => {
-  const failed = connectedMeteredProviders.value.filter(provider => costFeed.value.providers[provider].status === 'error')
+  const failed = connectedBillingProviders.value.filter(provider => costFeed.value.providers[provider].status === 'error')
   if (failed.length) return `${failed.map(providerName).join(' and ')} sync failed. Last successful observations are shown where available.`
-  const stale = connectedMeteredProviders.value.filter(provider => isProviderStale(costFeed.value.providers[provider]))
+  const stale = connectedBillingProviders.value.filter(provider => isProviderStale(costFeed.value.providers[provider]))
   return stale.length ? `${stale.map(providerName).join(' and ')} data is stale. Last known values remain visible.` : ''
 })
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
@@ -184,6 +186,11 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
             <p v-if="costFeed.providers[provider].lastSyncedAt" class="metric-note">Last successful sync · {{ new Date(costFeed.providers[provider].lastSyncedAt!).toLocaleString() }}</p>
           </article>
           <article class="provider-overview-card">
+            <h3>DigitalOcean <span class="metric-note">Finalized invoice totals</span></h3>
+            <template v-if="digitalOceanInvoices.length"><div v-for="invoice in digitalOceanInvoices.slice(0, 3)" :key="invoice.id" class="provider-overview-value">{{ money(invoice.amount, invoice.currency) }} <span>· {{ invoice.periodStart.slice(0, 7) }} invoice period</span></div><p class="metric-note">Previews, balances, nightly usage estimates, payments, and credit events are excluded.</p></template>
+            <p v-else class="metric-note">{{ connectionStatuses?.digitalocean.configured ? 'Connected; finalized invoices are not available yet.' : 'Not connected' }}</p>
+          </article>
+          <article class="provider-overview-card">
             <h3>Hostinger <span class="metric-note">Fixed recurring commitments</span></h3>
             <div v-for="total in hostingerFixedTotals" :key="total.currency" class="provider-overview-value">{{ money(total.monthly, total.currency) }} <span>/ mo equivalent</span></div>
             <p v-if="!hostingerFixedTotals.length" class="metric-note">{{ connectionStatuses?.hostinger.configured ? 'Connected; eligible renewals appear after sync.' : 'Not connected' }}</p>
@@ -196,7 +203,7 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuse
             <p v-else class="metric-note">Per-currency monthly equivalent; upcoming charges are listed below.</p>
           </article>
         </div>
-        <p class="metric-note">Actual charges to date are not a full-month projection. Forecasts already include actuals; currencies remain separate.</p>
+        <p class="metric-note">Actual charges to date are not a full-month projection. Forecasts already include actuals; currencies remain separate. DigitalOcean finalized invoices are shown for their billing periods, not as current-month accrual.</p>
         <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger commitments use last-known provider details. They remain visible in fixed subscriptions, but are omitted from upcoming-charge totals until confirmed by a successful sync.</p>
       </section>
       <p v-if="loading" role="status">Loading your subscriptions…</p>

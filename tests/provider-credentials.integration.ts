@@ -31,7 +31,7 @@ test('credential encryption, guarded writes and failure handling run in real wor
       await call('load', { provider: 'aws' }, 503)
       await call('initialize')
       assert.equal(await call('load', { provider: 'aws' }), null)
-      assert.deepEqual(await call('list'), { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 } })
+      assert.deepEqual(await call('list'), { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 } })
     })
     await t.test('only ciphertext reaches D1 while status responses never include secrets', async () => {
       const saved = await call('save', { provider: 'aws', credentials: aws, revision: 0, key })
@@ -57,6 +57,11 @@ test('credential encryption, guarded writes and failure handling run in real wor
       const openaiRow = await call('inspect', { provider: 'openai' })
       assert.ok(!JSON.stringify(openaiRow).includes(openai.adminApiKey))
       assert.ok(!JSON.stringify(await call('list')).includes(openai.adminApiKey))
+      const digitalocean = { apiToken: 'TEST_DIGITALOCEAN_TOKEN' }
+      await call('save', { provider: 'digitalocean', credentials: digitalocean, revision: 0, key })
+      assert.deepEqual(await call('load', { provider: 'digitalocean', key }), digitalocean)
+      const digitaloceanRow = await call('inspect', { provider: 'digitalocean' })
+      assert.ok(!JSON.stringify(digitaloceanRow).includes(digitalocean.apiToken))
     })
     await t.test('wrong, malformed and missing keys fail without destroying saved credentials', async () => {
       for (const invalid of [undefined, '', 'short', 'g'.repeat(64), 'b'.repeat(64)]) {

@@ -1,4 +1,4 @@
-export type CostProvider = 'aws' | 'cloudflare' | 'openai'
+export type CostProvider = 'aws' | 'cloudflare' | 'openai' | 'digitalocean'
 export type CostBreakdown = Readonly<{ service: string; amount: number; currency: string }>
 
 /** Metered observations are separate from fixed subscription commitments. End dates are exclusive. */
@@ -62,7 +62,7 @@ function freezeMetadata(value: unknown): unknown {
 
 export function createCostSnapshot(input: CostSnapshot): CostSnapshot {
   if (typeof input.id !== 'string' || !input.id.trim()) throw new Error('Snapshot id is required')
-  if (!['aws', 'cloudflare', 'openai'].includes(input.provider)) throw new Error('Invalid cost provider')
+  if (!['aws', 'cloudflare', 'openai', 'digitalocean'].includes(input.provider)) throw new Error('Invalid cost provider')
   if (!validDate(input.periodStart) || !validDate(input.periodEnd) || input.periodStart >= input.periodEnd) throw new Error('Cost period must contain valid ascending dates')
   if (typeof input.amount !== 'number') throw new Error('Snapshot amount must be a number')
   const amount = normalizeUsageAmount(input.amount)

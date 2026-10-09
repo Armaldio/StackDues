@@ -1,6 +1,7 @@
 import ledgerMigration from '../../migrations/0002_ledger.sql'
 import migration from '../../migrations/0003_provider_credentials.sql'
 import extensionMigration from '../../migrations/0006_openai_costs.sql'
+import digitalOceanMigration from '../../migrations/0007_digitalocean_billing.sql'
 import { listProviderConnections, loadProviderCredentials, removeProviderCredentials, saveProviderCredentials } from '../../server/security/provider-credentials.ts'
 import { LedgerError } from '../../server/data/ledger.ts'
 import { readCostFeed } from '../../server/data/ledger.ts'
@@ -11,7 +12,7 @@ export default {
     const { action, provider, credentials, revision, key, sql } = await request.json() as any
     try {
       if (action === 'initialize') { for (const sql of [ledgerMigration, migration]) await env.DB.exec(sql.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ')); return Response.json({ ready: true }) }
-      if (action === 'extend') { await env.DB.exec(extensionMigration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ')); return Response.json({ ready: true }) }
+      if (action === 'extend') { for (const migration of [extensionMigration, digitalOceanMigration]) await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ')); return Response.json({ ready: true }) }
       if (action === 'list') return Response.json(await listProviderConnections(env.DB))
       if (action === 'costs') return Response.json(await readCostFeed(env.DB))
       if (action === 'save') return Response.json(await saveProviderCredentials(env.DB, provider, credentials, revision, key))

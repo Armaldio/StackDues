@@ -1,16 +1,17 @@
 import { LedgerError } from '../data/ledger.ts'
 
-export type CredentialProvider = 'aws' | 'cloudflare' | 'hostinger' | 'openai'
+export type CredentialProvider = 'aws' | 'cloudflare' | 'hostinger' | 'openai' | 'digitalocean'
 export type AwsCredentials = { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
 export type CloudflareCredentials = { accountId: string; apiToken: string }
 export type HostingerCredentials = { apiToken: string }
 export type OpenAiCredentials = { adminApiKey: string }
-export type ProviderCredentials = { aws: AwsCredentials; cloudflare: CloudflareCredentials; hostinger: HostingerCredentials; openai: OpenAiCredentials }
+export type DigitalOceanCredentials = { apiToken: string }
+export type ProviderCredentials = { aws: AwsCredentials; cloudflare: CloudflareCredentials; hostinger: HostingerCredentials; openai: OpenAiCredentials; digitalocean: DigitalOceanCredentials }
 export type ConnectionStatus = { configured: boolean; revision: number; updatedAt?: string }
 export type ConnectionStatuses = Record<CredentialProvider, ConnectionStatus>
 type CredentialRow = { provider: CredentialProvider; version: number; iv: string | null; ciphertext: string | null; revision: number; updated_at: string }
 type StatusRow = { provider: CredentialProvider; configured: number; revision: number; updated_at: string }
-const providers = ['aws', 'cloudflare', 'hostinger', 'openai'] as const
+const providers = ['aws', 'cloudflare', 'hostinger', 'openai', 'digitalocean'] as const
 const statusColumns = 'provider, ciphertext IS NOT NULL AS configured, revision, updated_at'
 const encoder = new TextEncoder()
 
@@ -63,7 +64,7 @@ async function storage<T>(operation: () => Promise<T>): Promise<T> {
 export async function listProviderConnections(db: D1Database): Promise<ConnectionStatuses> {
   return storage(async () => {
     const result = await db.prepare(`SELECT ${statusColumns} FROM provider_credentials`).all<StatusRow>()
-    const statuses: ConnectionStatuses = { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 } }
+    const statuses: ConnectionStatuses = { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 } }
     for (const row of result.results) statuses[row.provider] = status(row)
     return statuses
   })

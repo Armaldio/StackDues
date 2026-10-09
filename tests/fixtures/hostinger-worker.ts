@@ -3,6 +3,7 @@ import credentialMigration from '../../migrations/0003_provider_credentials.sql'
 import hostingerMigration from '../../migrations/0004_hostinger_discovery.sql'
 import autoCommitmentMigration from '../../migrations/0005_hostinger_auto_commitments.sql'
 import openAiMigration from '../../migrations/0006_openai_costs.sql'
+import digitalOceanMigration from '../../migrations/0007_digitalocean_billing.sql'
 import { createStoredSubscription, deleteStoredSubscription, listSubscriptions, patchStoredSubscription } from '../../server/data/ledger.ts'
 import { createHostingerLedgerEntry, hostingerDeleteExclusionStatement, hostingerEditStatement, linkHostingerToLedger, readHostingerDiscovery, refreshHostingerEntries } from '../../server/data/hostinger.ts'
 import { setHostingerExclusion } from '../../server/data/hostinger.ts'
@@ -15,7 +16,7 @@ export default {
     const input = await request.json() as Record<string, any>
     try {
       if (input.action === 'initialize') {
-        for (const migration of [ledgerMigration, credentialMigration, hostingerMigration, autoCommitmentMigration, openAiMigration]) await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' '))
+        for (const migration of [ledgerMigration, credentialMigration, hostingerMigration, autoCommitmentMigration, openAiMigration, digitalOceanMigration]) await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' '))
         return Response.json({ ready: true })
       }
       if (input.action === 'save') return Response.json(await saveProviderCredentials(env.DB, 'hostinger', { apiToken: 'TEST_FAKE_HOSTINGER_TOKEN' }, 0, key))

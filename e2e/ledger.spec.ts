@@ -110,20 +110,20 @@ test('connector catalog searches and filters supported versus planned providers 
   await search.focus()
   await expect(search).toBeFocused()
   await search.fill('DigitalOcean')
-  const digitalOcean = page.locator('.coming-soon-card').filter({ hasText: 'DigitalOcean' })
+  const digitalOcean = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'DigitalOcean', exact: true }) })
   await expect(digitalOcean).toBeVisible()
   await expect(digitalOcean).toContainText('billing:read')
-  await expect(digitalOcean.getByRole('button')).toHaveCount(0)
+  await expect(digitalOcean).toContainText('Finalized monthly invoice totals in USD')
   const supportedCards = page.locator('.connection-grid:not(.planned-grid) .connection-card')
-  await expect(supportedCards).toHaveCount(0)
+  await expect(supportedCards).toHaveCount(1)
   await search.fill('no matching provider')
   await expect(page.getByText('No providers match your search.')).toBeVisible()
   await search.fill('')
   await page.getByLabel('Provider availability').selectOption('coming-soon')
-  await expect(page.locator('.coming-soon-card')).toHaveCount(2)
+  await expect(page.locator('.coming-soon-card')).toHaveCount(1)
   await expect(supportedCards).toHaveCount(0)
   await page.getByLabel('Provider availability').selectOption('available')
-  await expect(supportedCards).toHaveCount(4)
+  await expect(supportedCards).toHaveCount(5)
   const aws = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services' }) })
   await expect(aws).toContainText('Actual usage, comparable period and full-month forecast when available')
   await expect(aws).toContainText('Cost Explorer read-only')
@@ -449,6 +449,54 @@ test('OpenAI organization costs connect with explicit admin scope and update Ove
   await expect(page.locator('#infrastructure')).toContainText('$4.75')
   await expect(page.locator('#history')).toContainText('OpenAI API')
   expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('test-admin-key')
+})
+
+test('DigitalOcean imports finalized invoices on connect without counting preview as usage', async ({ page }) => {
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const periodStart = `${capturedAt.slice(0, 7)}-01`
+  const date = new Date(`${periodStart}T00:00:00Z`)
+  date.setUTCMonth(date.getUTCMonth() + 1)
+  const periodEnd = date.toISOString().slice(0, 10)
+  await mockLedger(page)
+  let configured = false, synced = false
+  await page.route('**/api/connections', route => route.fulfill({ json: {
+    aws: { configured: true, revision: 1 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 },
+    digitalocean: { configured, revision: configured ? 1 : 0 },
+  } }))
+  await page.route('**/api/connections/digitalocean', async route => {
+    expect(route.request().postDataJSON()).toEqual({ credentials: { apiToken: 'test-do-token' }, revision: 0 })
+    configured = true
+    return route.fulfill({ json: { configured: true, revision: 1 } })
+  })
+  await page.route('**/api/costs', route => route.fulfill({ json: {
+    snapshots: synced ? [
+      { id: 'aws-actual', provider: 'aws', periodStart, periodEnd, amount: 4, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+      { id: 'aws-forecast', provider: 'aws', periodStart, periodEnd, amount: 6.5, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
+      { id: 'do-invoice', provider: 'digitalocean', periodStart, periodEnd, amount: 18.4, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'invoice', scope: 'finalized-invoice-total', invoiceCount: 1, breakdown: [{ service: 'Finalized invoice 2026-09', amount: 18.4, currency: 'USD' }] } },
+    ] : [],
+    providers: { aws: { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' }, openai: { status: 'not-configured' }, digitalocean: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: 'not-configured' } },
+  } }))
+  await page.route('**/api/costs/refresh*', async route => {
+    expect(new URL(route.request().url()).searchParams.get('provider')).toBe('digitalocean')
+    synced = true
+    return route.fulfill({ json: { providers: { digitalocean: { status: 'synced' } } } })
+  })
+  await page.goto('./')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'DigitalOcean', exact: true }) })
+  await expect(card).toContainText('billing:read')
+  await card.locator('summary').click()
+  await card.getByLabel('Personal access token').fill('test-do-token')
+  await card.getByRole('button', { name: 'Save DigitalOcean connection' }).click()
+  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  const overview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /DigitalOcean/ }) })
+  await expect(overview).toContainText('USD 18.40')
+  await expect(overview).toContainText('Finalized invoice totals')
+  await expect(page.locator('#infrastructure')).toContainText('Finalized invoice total ·')
+  await expect(page.locator('#infrastructure')).toContainText('$18.40')
+  await expect(page.locator('#history')).toContainText('DigitalOcean')
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 6.50')
+  await expect(page.locator('.tracked-spending-card')).not.toContainText('USD 24.90')
+  expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('test-do-token')
 })
 
 test('cost history defaults to latest observations, filters currencies and periods, and reveals older captures on demand', async ({ page }) => {
