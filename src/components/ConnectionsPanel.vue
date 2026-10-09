@@ -4,7 +4,8 @@ import { ConnectionApiError, deleteConnection, fetchConnections, refreshProvider
 import { syncHostinger } from '../lib/hostinger-api'
 import type { CostFeed } from '../lib/cost-feed'
 import type { HostingerDiscovery } from '../lib/hostinger-api'
-const props = defineProps<{ costFeed: CostFeed; hostingerSync?: HostingerDiscovery['sync']; initialStatuses?: ConnectionStatuses }>()
+import { currentCostSnapshots, isProviderStale } from '../lib/cost-feed'
+const props = defineProps<{ costFeed: CostFeed; hostinger?: HostingerDiscovery; initialStatuses?: ConnectionStatuses }>()
 const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses]; details: [provider: ConnectionProvider | 'github'] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger']
 const names = { aws: 'Amazon Web Services', cloudflare: 'Cloudflare', hostinger: 'Hostinger', openai: 'OpenAI API', digitalocean: 'DigitalOcean' }
@@ -37,6 +38,7 @@ const error = ref('')
 const expired = ref(false)
 const notice = ref('')
 const syncState = reactive<Record<ConnectionProvider, 'idle' | 'syncing' | 'synced' | 'failed'>>({ aws: 'idle', cloudflare: 'idle', hostinger: 'idle', openai: 'idle', digitalocean: 'idle' })
+const syncAttemptAt = reactive<Record<ConnectionProvider, number>>({ aws: 0, cloudflare: 0, hostinger: 0, openai: 0, digitalocean: 0 })
 const syncError = reactive<Record<ConnectionProvider, string>>({ aws: '', cloudflare: '', hostinger: '', openai: '', digitalocean: '' })
 const drafts = reactive<ProviderCredentials>({ aws: { accessKeyId: '', secretAccessKey: '', sessionToken: '' }, cloudflare: { accountId: '', apiToken: '' }, hostinger: { apiToken: '' }, openai: { adminApiKey: '' }, digitalocean: { apiToken: '' } })
 function clear(provider: ConnectionProvider) {
@@ -47,15 +49,28 @@ function clear(provider: ConnectionProvider) {
   else drafts.hostinger.apiToken = ''
 }
 function fail(cause: unknown) { error.value = cause instanceof Error ? cause.message : 'The request failed. Reload connections before trying again.'; expired.value = cause instanceof ConnectionApiError && cause.status === 401 }
-function lastRefresh(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostingerSync?.lastSyncedAt : props.costFeed.providers[provider].lastSyncedAt }
-function lastAttempt(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostingerSync?.lastAttemptAt : props.costFeed.providers[provider].lastAttemptAt }
-function refreshStatus(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostingerSync?.status : props.costFeed.providers[provider].status }
+function lastRefresh(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostinger?.sync.lastSyncedAt : props.costFeed.providers[provider].lastSyncedAt }
+function lastAttempt(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostinger?.sync.lastAttemptAt : props.costFeed.providers[provider].lastAttemptAt }
+function refreshStatus(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostinger?.sync.status : props.costFeed.providers[provider].status }
 function formatTime(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
+function hasSyncFailure(provider: ConnectionProvider) {
+  const status = refreshStatus(provider)
+  const persistedAt = Date.parse(status === 'error' ? lastAttempt(provider) ?? '' : lastRefresh(provider) ?? '') || 0
+  const persistedAfterLocalAttempt = syncAttemptAt[provider] > 0 && persistedAt + 1_000 >= syncAttemptAt[provider]
+  if (syncState[provider] === 'failed') return !persistedAfterLocalAttempt || status === 'error'
+  if (syncState[provider] === 'synced') return status === 'error' && persistedAfterLocalAttempt
+  return status === 'error'
+}
 function connectionLabel(provider: ConnectionProvider) {
   if (busy.value === provider && syncState[provider] === 'idle') return 'Connecting…'
   if (syncState[provider] === 'syncing') return 'Syncing…'
-  if (syncState[provider] === 'failed' || refreshStatus(provider) === 'error') return 'Sync failed'
-  if (syncState[provider] === 'synced' || refreshStatus(provider) === 'synced') return 'Synced'
+  if (statuses.value && !statuses.value[provider].configured) return 'Not connected'
+  if (hasSyncFailure(provider)) return 'Sync failed'
+  if (provider !== 'hostinger' && isProviderStale(props.costFeed.providers[provider])) return 'Needs attention'
+  if (syncState[provider] === 'synced' || refreshStatus(provider) === 'synced') {
+    const hasData = provider === 'hostinger' ? !!props.hostinger?.subscriptions.length : currentCostSnapshots(props.costFeed).some(row => row.provider === provider)
+    return hasData ? 'Updated' : provider === 'hostinger' ? 'Checked · no renewals returned' : 'Checked · no data returned'
+  }
   return statuses.value ? statuses.value[provider].configured ? 'Credentials saved' : 'Not connected' : loading.value ? 'Loading…' : 'Unavailable'
 }
 async function reload() {
@@ -79,6 +94,7 @@ async function save(provider: ConnectionProvider) {
   finally { clear(provider); busy.value = undefined }
 }
 async function runSync(provider: ConnectionProvider): Promise<boolean> {
+  syncAttemptAt[provider] = Date.now()
   syncState[provider] = 'syncing'; syncError[provider] = ''
   try {
     if (provider === 'hostinger') await syncHostinger()
@@ -91,11 +107,11 @@ async function runSync(provider: ConnectionProvider): Promise<boolean> {
   }
 }
 async function retrySync(provider: ConnectionProvider) {
-  if (busy.value || syncState[provider] !== 'failed') return
+  if (busy.value) return
   busy.value = provider
   try {
     const synced = await runSync(provider)
-    notice.value = synced ? `${names[provider]} sync completed.` : ''
+    notice.value = synced ? `${names[provider]} billing data checked.` : ''
     emit('changed')
   } finally { busy.value = undefined }
 }
@@ -104,7 +120,6 @@ async function disconnect(provider: ConnectionProvider) {
   busy.value = provider; notice.value = ''
   try {
     statuses.value[provider] = await deleteConnection(provider, statuses.value[provider].revision)
-    await runSync(provider)
     syncState[provider] = 'idle'; syncError[provider] = ''
     notice.value = `${names[provider]} disconnected. Previous cost observations are retained.`
     emit('loaded', statuses.value); emit('changed')
@@ -118,7 +133,7 @@ onUnmounted(() => providers.forEach(clear))
 
 <template>
   <section id="connections" class="connections-section" aria-labelledby="connections-heading">
-    <div class="section-header"><div><p class="eyebrow">Private provider access</p><h2 id="connections-heading">Connections</h2></div><button type="button" class="secondary-button" :disabled="loading || !!busy" @click="reload">{{ loading ? 'Loading…' : 'Reload connections' }}</button></div>
+    <div class="section-header"><div><p class="eyebrow">Private provider access</p><h2 id="connections-heading">Connections</h2></div><button v-if="error" type="button" class="text-button" :disabled="loading || !!busy" @click="reload">{{ loading ? 'Checking…' : 'Try again' }}</button></div>
     <p class="section-description">Credentials are encrypted on the server. Saved secrets are never returned to this dashboard. Replacing credentials replaces the entire connection; previous cost history is kept.</p>
     <p v-if="error" class="error-message" role="alert">{{ error }} <a v-if="expired" href="/login">Sign in</a></p><p v-if="notice" class="connection-notice" role="status">{{ notice }}</p>
     <div class="catalog-tools">
@@ -144,10 +159,11 @@ onUnmounted(() => providers.forEach(clear))
         </details>
         <button v-if="statuses?.[provider].configured" class="text-button delete-button" type="button" :disabled="loading || !!busy || !!error" @click="disconnect(provider)">Disconnect {{ names[provider] }}</button>
         <p v-if="syncState[provider] === 'failed'" class="error-message" role="status">{{ syncError[provider] }}</p>
-        <button v-if="syncState[provider] === 'failed'" class="secondary-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Retrying…' : `Retry ${names[provider]} sync` }}</button>
+        <button v-if="statuses?.[provider].configured && hasSyncFailure(provider)" class="secondary-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Retrying…' : `Retry ${names[provider]} sync` }}</button>
+        <details v-if="statuses?.[provider].configured && !hasSyncFailure(provider)" class="connection-sync-actions"><summary>Advanced sync actions</summary><button class="text-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Checking…' : 'Check for updates' }}</button></details>
         <p v-if="syncState[provider] === 'synced'" class="connection-next-step">{{ provider === 'hostinger' ? 'Next: review eligible fixed renewals in Hostinger subscriptions below.' : 'Next: review current charges in Overview and Infrastructure.' }}</p>
         <p v-else-if="statuses?.[provider].configured" class="connection-next-step">Next: review saved {{ provider === 'hostinger' ? 'renewals' : 'billing data' }} in Overview.</p>
-        <p v-if="lastRefresh(provider)" class="metric-note">Last billing sync · {{ formatTime(lastRefresh(provider)!) }}</p>
+        <p v-if="lastRefresh(provider)" class="metric-note">{{ refreshStatus(provider) === 'error' ? 'Last successful data · ' : 'Last billing sync · ' }}{{ formatTime(lastRefresh(provider)!) }}</p>
         <p v-if="!lastRefresh(provider) && refreshStatus(provider) === 'error'" class="metric-note">Last sync failed; previous data is retained.</p>
         <p v-if="lastAttempt(provider) && refreshStatus(provider) === 'error'" class="metric-note">Last sync attempt · {{ formatTime(lastAttempt(provider)!) }}</p>
         <p v-if="!lastRefresh(provider) && refreshStatus(provider) !== 'error' && statuses?.[provider].updatedAt" class="metric-note">Credentials saved · {{ formatTime(statuses[provider].updatedAt!) }}. No successful billing sync yet.</p>

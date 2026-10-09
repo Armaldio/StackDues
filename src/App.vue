@@ -18,12 +18,11 @@ import { readHostingerDiscovery, type HostingerDiscovery as HostingerState } fro
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
+const financialRefreshError = ref('')
 const costFeedResolved = ref(false)
-const costFeedLoaded = ref(false)
 const connectionStatusesResolved = ref(false)
+const connectionStatusesError = ref(false)
 const hostingerStateResolved = ref(false)
-const infrastructure = ref<InstanceType<typeof InfrastructurePanel>>()
-const hostinger = ref<InstanceType<typeof HostingerDiscovery>>()
 const connectionStatuses = ref<ConnectionStatuses>()
 const hostingerState = ref<HostingerState>()
 const router = useRouter()
@@ -58,9 +57,9 @@ function normalizeLegacyHash(hash = route.value.hash) {
 watch(() => route.value.hash, hash => { if (hash) normalizeLegacyHash(hash) })
 onMounted(() => {
   void reloadLedger()
-  void fetchCostFeed('/api/costs').then(setCostFeed).catch(() => {}).finally(() => { costFeedResolved.value = true })
-  void fetchConnections().then(statuses => { connectionStatuses.value = statuses }).catch(() => {}).finally(() => { connectionStatusesResolved.value = true })
-  void readHostingerDiscovery().then(state => { hostingerState.value = state }).catch(() => {}).finally(() => { hostingerStateResolved.value = true })
+  void fetchCostFeed('/api/costs').then(feed => { setCostFeed(feed); financialRefreshError.value = '' }).catch(() => { financialRefreshError.value = 'Saved billing data could not be checked. Previously displayed observations remain available.' }).finally(() => { costFeedResolved.value = true })
+  void fetchConnections().then(statuses => { connectionStatuses.value = statuses }).catch(() => { connectionStatusesError.value = true }).finally(() => { connectionStatusesResolved.value = true })
+  void readHostingerDiscovery().then(setHostingerState).catch(() => {}).finally(() => { hostingerStateResolved.value = true })
   normalizeLegacyHash(route.value.hash)
   if (!routeSections[route.value.path]) void router.replace('/')
 })
@@ -69,7 +68,42 @@ const notice = ref('')
 const exportError = ref('')
 const today = ref(new Date().toISOString().slice(0, 10))
 const timer = window.setInterval(() => { today.value = new Date().toISOString().slice(0, 10) }, 60_000)
-onUnmounted(() => { window.clearInterval(timer) })
+const financialRefreshInterval = 15 * 60 * 1000
+let lastFinancialRefresh = Date.now()
+let financialRefresh: Promise<void> | undefined
+let financialReadRevision = 0
+async function refreshPersistedFinancialData(force = false) {
+  if (!force && Date.now() - lastFinancialRefresh < financialRefreshInterval) return financialRefresh
+  if (!force && financialRefresh) return financialRefresh
+  lastFinancialRefresh = Date.now()
+  const revision = ++financialReadRevision
+  const operation = Promise.allSettled([
+    fetchCostFeed('/api/costs'),
+    readHostingerDiscovery(),
+    fetchConnections(),
+  ]).then(results => {
+    if (revision !== financialReadRevision) return
+    if (results[0]!.status === 'fulfilled') applyCostFeed(results[0]!.value)
+    if (results[1]!.status === 'fulfilled') hostingerState.value = results[1]!.value
+    if (results[2]!.status === 'fulfilled') setConnectionStatuses(results[2]!.value)
+    else connectionStatusesError.value = true
+    financialRefreshError.value = results.slice(0, 2).some(result => result.status === 'rejected')
+      ? 'Saved billing data could not be checked. Previously displayed observations remain available.'
+      : ''
+  }).finally(() => { if (financialRefresh === operation) financialRefresh = undefined })
+  financialRefresh = operation
+  return operation
+}
+function refreshWhenVisible() { if (document.visibilityState === 'visible') void refreshPersistedFinancialData() }
+window.addEventListener('focus', refreshWhenVisible)
+document.addEventListener('visibilitychange', refreshWhenVisible)
+const financialRefreshTimer = window.setInterval(refreshWhenVisible, 60_000)
+onUnmounted(() => {
+  window.clearInterval(timer)
+  window.clearInterval(financialRefreshTimer)
+  window.removeEventListener('focus', refreshWhenVisible)
+  document.removeEventListener('visibilitychange', refreshWhenVisible)
+})
 const showForm = ref(false)
 const editing = ref<StoredSubscription>()
 const search = ref('')
@@ -132,23 +166,27 @@ function editDetailedSubscription(item: Subscription) {
   void closeServiceDetails()
   if (stored) openForm(stored)
 }
-const hasConfiguredProvider = computed(() => Object.values(connectionStatuses.value ?? {}).some(status => status.configured))
+const hasConfiguredProvider = computed(() => connectionStatuses.value ? Object.values(connectionStatuses.value).some(status => status.configured) : Object.values(costFeed.value.providers).some(status => status.status !== 'not-configured') || (!!hostingerState.value && hostingerState.value.sync.status !== 'not-configured'))
 const totals = computed(() => normalizedTotals(subscriptions.value))
 const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
-const connectedMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
-const connectedBillingProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(provider => costFeed.value.providers[provider].status !== 'not-configured'))
+function providerIsConfigured(provider: 'aws' | 'cloudflare' | 'openai' | 'digitalocean') {
+  return connectionStatuses.value ? connectionStatuses.value[provider].configured : costFeed.value.providers[provider].status !== 'not-configured'
+}
+function hostingerIsConfigured() { return connectionStatuses.value ? connectionStatuses.value.hostinger.configured : !!hostingerState.value && hostingerState.value.sync.status !== 'not-configured' }
+const connectedMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(providerIsConfigured))
+const connectedBillingProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(providerIsConfigured))
 const meteredTotals = computed(() => usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value))
 const trackedTotals = computed(() => trackedSpendingTotals(totals.value, meteredTotals.value, connectedMeteredProviders.value, meterSnapshots.value))
 const providerUsage = computed(() => ({
-  aws: usageTotals(meterSnapshots.value, today.value, ['aws']),
-  cloudflare: usageTotals(meterSnapshots.value, today.value, ['cloudflare']),
-  openai: usageTotals(meterSnapshots.value, today.value, ['openai']),
+  aws: usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value.includes('aws') ? ['aws'] : []),
+  cloudflare: usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value.includes('cloudflare') ? ['cloudflare'] : []),
+  openai: usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value.includes('openai') ? ['openai'] : []),
 }))
 const actualPeriodLabels = computed(() => Object.fromEntries(trackedTotals.value.map(({ currency }) => [currency, meteredProviders.map(provider => {
   const usage = providerUsage.value[provider].find(item => item.currency === currency && item.hasActual)
   return usage ? `${providerName(provider)} · ${periodDescription(provider, currency)}` : null
 }).filter((value): value is string => value !== null).join(' · ')])))
-const spendingInsights = computed(() => overviewInsights(costFeed.value.snapshots))
+const spendingInsights = computed(() => overviewInsights(costFeed.value.snapshots.filter(row => connectedBillingProviders.value.includes(row.provider))))
 const featuredInsight = computed(() => spendingInsights.value.find(item => item.drivers.length || item.changePercent !== null) ?? spendingInsights.value[0])
 const lastSuccessfulSync = computed(() => [
   ...Object.values(costFeed.value.providers).map(provider => provider.lastSyncedAt),
@@ -158,7 +196,6 @@ const upcomingCharges = computed(() => upcomingRenewals(confirmedSubscriptions.v
 const hostingerLinkedIds = computed(() => new Set((hostingerState.value?.subscriptions ?? []).map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const hostingerFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider === 'Hostinger' || hostingerLinkedIds.value.has(item.id))))
 const manualFixedTotals = computed(() => normalizedTotals(subscriptions.value.filter(item => item.provider !== 'Hostinger' && !hostingerLinkedIds.value.has(item.id))))
-const configuredMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(provider => connectionStatuses.value?.[provider].configured))
 const meteredProviders = ['aws', 'cloudflare', 'openai'] as const
 const digitalOceanInvoices = computed(() => meterSnapshots.value.filter(row => row.provider === 'digitalocean' && row.metadata?.scope === 'finalized-invoice-total').sort((a, b) => b.periodStart.localeCompare(a.periodStart)))
 function providerName(provider: 'aws' | 'cloudflare' | 'openai' | 'digitalocean') { return provider === 'aws' ? 'AWS' : provider === 'cloudflare' ? 'Cloudflare' : provider === 'openai' ? 'OpenAI API' : 'DigitalOcean' }
@@ -242,18 +279,12 @@ function downloadSubscriptions() {
   }
 }
 async function reloadFinancialViews() {
-  const reloadCosts = async () => {
-    if (infrastructure.value) await infrastructure.value.reload()
-    else setCostFeed(await fetchCostFeed('/api/costs'))
-  }
-  const reloadHostinger = async () => {
-    if (hostinger.value) await hostinger.value.reload()
-    else hostingerState.value = await readHostingerDiscovery()
-  }
-  await Promise.allSettled([reloadLedger(), reloadCosts(), reloadHostinger()])
+  await Promise.allSettled([reloadLedger(), refreshPersistedFinancialData(true)])
 }
-function setConnectionStatuses(statuses: ConnectionStatuses) { connectionStatuses.value = statuses }
-function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costFeedLoaded.value = true }
+function setConnectionStatuses(statuses: ConnectionStatuses) { financialReadRevision++; connectionStatuses.value = statuses; connectionStatusesError.value = false }
+function applyCostFeed(feed: typeof costFeed.value) { costFeed.value = feed }
+function setCostFeed(feed: typeof costFeed.value) { financialReadRevision++; applyCostFeed(feed) }
+function setHostingerState(state: HostingerState) { financialReadRevision++; hostingerState.value = state }
 
 </script>
 
@@ -269,6 +300,8 @@ function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costF
     <main id="main-content" ref="mainContent" tabindex="-1">
       <header class="page-header"><div><p class="eyebrow">{{ sectionMeta.eyebrow }}</p><h1>{{ sectionMeta.title }}<span class="heading-period">.</span></h1><p class="muted">{{ sectionMeta.subtitle }}</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><div class="header-actions"><NuxtLink v-if="currentSection !== 'connections'" class="primary-button" to="/connections">{{ hasConfiguredProvider ? 'Manage connections' : 'Connect a provider' }}</NuxtLink><button v-if="currentSection === 'services' || currentSection === 'overview'" class="secondary-button" :disabled="blocked" @click="openForm()">Add manually</button></div></header>
       <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload subscriptions</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
+      <p v-if="financialRefreshError" class="feed-warning financial-refresh-warning" role="alert">{{ financialRefreshError }} <button class="text-button" type="button" :disabled="!!financialRefresh" @click="refreshPersistedFinancialData(true)">Try again</button></p>
+      <p v-if="connectionStatusesError" class="feed-warning" role="status">Connection status could not be checked. Last known billing data remains visible.</p>
       <template v-if="currentSection === 'overview'">
       <p v-if="loading" role="status">Loading your subscriptions…</p>
       <p v-else-if="busy" role="status">Saving your subscriptions…</p>
@@ -309,20 +342,20 @@ function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costF
             <template v-if="providerUsage[provider].length">
               <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>{{ provider === 'openai' ? 'Reported API costs to date' : 'Actual charges to date' }} · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month forecast</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : 'Forecast unavailable' }}</dd></div><div><dt>Reported period</dt><dd>{{ periodDescription(provider, usage.currency) }}</dd></div></dl>
             </template>
-            <p v-else class="metric-note">{{ connectionStatuses?.[provider].configured ? 'Connected; billing observations are not available yet.' : 'Not connected' }}</p>
+            <p v-else class="metric-note">{{ !providerIsConfigured(provider) ? 'Not connected' : costFeed.providers[provider].status === 'synced' ? 'Checked successfully; no current billing data was returned.' : 'Credentials saved; waiting for the first successful billing sync.' }}</p>
             <p v-if="costFeed.providers[provider].status === 'error'" class="feed-warning" role="status">Sync failed; last known charges remain visible.</p>
             <p v-else-if="isProviderStale(costFeed.providers[provider])" class="feed-warning" role="status">Last known charges are stale.</p>
-            <p v-if="costFeed.providers[provider].lastSyncedAt" class="metric-note">Last successful sync · {{ new Date(costFeed.providers[provider].lastSyncedAt!).toLocaleString() }}</p>
+            <p v-if="costFeed.providers[provider].lastSyncedAt" class="metric-note">{{ costFeed.providers[provider].status === 'error' ? 'Last successful data · ' : 'Last successful sync · ' }}{{ new Date(costFeed.providers[provider].lastSyncedAt!).toLocaleString() }}</p>
           </article>
           <article class="provider-overview-card">
             <h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider: 'digitalocean' }, $event)">DigitalOcean <span class="metric-note">Finalized invoice totals</span></button></h3>
             <template v-if="digitalOceanInvoices.length"><div v-for="invoice in digitalOceanInvoices.slice(0, 3)" :key="invoice.id" class="provider-overview-value">{{ money(invoice.amount, invoice.currency) }} <span>· {{ invoice.periodStart.slice(0, 7) }} invoice period</span></div><p class="metric-note">Previews, balances, nightly usage estimates, payments, and credit events are excluded.</p></template>
-            <p v-else class="metric-note">{{ connectionStatuses?.digitalocean.configured ? 'Connected; finalized invoices are not available yet.' : 'Not connected' }}</p>
+            <p v-else class="metric-note">{{ providerIsConfigured('digitalocean') ? 'Connected; finalized invoices are not available yet.' : 'Not connected' }}</p>
           </article>
           <article class="provider-overview-card">
             <h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider: 'hostinger' }, $event)">Hostinger <span class="metric-note">Fixed recurring commitments</span></button></h3>
             <div v-for="total in hostingerFixedTotals" :key="total.currency" class="provider-overview-value">{{ money(total.monthly, total.currency) }} <span>/ mo equivalent</span></div>
-            <p v-if="!hostingerFixedTotals.length" class="metric-note">{{ connectionStatuses?.hostinger.configured ? 'Connected; eligible renewals appear after sync.' : 'Not connected' }}</p>
+            <p v-if="!hostingerFixedTotals.length" class="metric-note">{{ hostingerIsConfigured() ? 'Connected; eligible renewals appear after sync.' : 'Not connected' }}</p>
             <p v-else class="metric-note">Included in fixed commitments and upcoming renewals.</p>
           </article>
           <article class="provider-overview-card">
@@ -343,10 +376,10 @@ function setCostFeed(feed: typeof costFeed.value) { costFeed.value = feed; costF
         <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: item.id }, $event)"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></button></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
       <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
-      <KeepAlive><HostingerDiscovery v-if="currentSection === 'services' && hostingerStateResolved" ref="hostinger" :initial="hostingerState" :ledger="subscriptions" :configured="connectionStatuses?.hostinger.configured ?? false" @changed="reloadLedger" @loaded="hostingerState = $event" /></KeepAlive>
-      <KeepAlive><InfrastructurePanel v-if="currentSection === 'services' && costFeedResolved && hostingerStateResolved" ref="infrastructure" :initial-feed="costFeed" :has-initial-feed="costFeedLoaded" :fixed-totals="totals" :configured-providers="configuredMeteredProviders" :today="today" @loaded="setCostFeed" @details="openProviderDetails($event)" /></KeepAlive>
+      <KeepAlive><HostingerDiscovery v-if="currentSection === 'services' && hostingerStateResolved" :initial="hostingerState" :ledger="subscriptions" @changed="reloadLedger" @loaded="setHostingerState" /></KeepAlive>
+      <KeepAlive><InfrastructurePanel v-if="currentSection === 'services' && costFeedResolved && hostingerStateResolved" :initial-feed="costFeed" :fixed-totals="totals" :today="today" :configured-providers="connectedBillingProviders" @details="openProviderDetails($event)" /></KeepAlive>
       </section>
-      <KeepAlive><ConnectionsPanel v-if="currentSection === 'connections' && connectionStatusesResolved" :initial-statuses="connectionStatuses" :cost-feed="costFeed" :hostinger-sync="hostingerState?.sync" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" /></KeepAlive>
+      <KeepAlive><ConnectionsPanel v-if="currentSection === 'connections' && connectionStatusesResolved" :initial-statuses="connectionStatuses" :cost-feed="costFeed" :hostinger="hostingerState" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" /></KeepAlive>
       <section v-if="currentSection === 'history'" class="history-screen">
         <div class="content-columns single-column"><SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" @select="openServiceDetails($event)" /></div>
         <CostHistory :snapshots="costFeed.snapshots" />

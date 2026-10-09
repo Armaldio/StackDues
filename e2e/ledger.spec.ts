@@ -2,7 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 
 async function mockLedger(page: Page, initial: Record<string, unknown>[] = [], mockCosts = true) {
   let subscriptions = initial
-  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
+  const configured = mockCosts ? false : true
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured, revision: configured ? 1 : 0 }, cloudflare: { configured, revision: configured ? 1 : 0 }, openai: { configured, revision: configured ? 1 : 0 }, digitalocean: { configured, revision: configured ? 1 : 0 }, hostinger: { configured, revision: configured ? 1 : 0 } } }))
   if (mockCosts) await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
   await page.route('**/api/subscriptions**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname
@@ -136,6 +137,7 @@ test('Overview shows per-currency known spend, forecast completeness and the nex
     { id: 'soonest', name: 'Soonest', billingType: 'fixed', amount: 5, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(1), status: 'active', revision: 1 },
     { id: 'later', name: 'Later', billingType: 'fixed', amount: 8, currency: 'GBP', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(30), status: 'active', revision: 1 },
   ])
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: true, revision: 1 }, cloudflare: { configured: true, revision: 1 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
   await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [
     { id: 'aws-actual', provider: 'aws', periodStart, periodEnd, amount: 4.5, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
     { id: 'aws-forecast', provider: 'aws', periodStart, periodEnd, amount: 100, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
@@ -230,6 +232,81 @@ test('path routes load and reload distinct screens and support browser back/forw
   }
 })
 
+test('scheduled persisted updates reach Overview without reload and route changes do not start provider syncs', async ({ page }) => {
+  await mockLedger(page)
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const periodStart = `${capturedAt.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(new Date(capturedAt).getUTCFullYear(), new Date(capturedAt).getUTCMonth() + 1, 1)).toISOString().slice(0, 10)
+  let amount = 4, reads = 0, syncPosts = 0
+  let hostingerRows: Record<string, unknown>[] = []
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: true, revision: 1 }, cloudflare: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 }, hostinger: { configured: true, revision: 1 } } }))
+  const hostingerSync = { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt }
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: hostingerRows, sync: hostingerSync } }))
+  await page.route('**/api/hostinger/subscriptions/sync', route => { syncPosts++; return route.fulfill({ json: { subscriptions: hostingerRows, sync: hostingerSync } }) })
+  await page.route('**/api/costs', route => {
+    reads++
+    return route.fulfill({ json: { snapshots: [{ id: `aws-${amount}`, provider: 'aws', periodStart, periodEnd, amount, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } }], providers: { aws: { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' } } } })
+  })
+  await page.route('**/api/costs/refresh*', route => { syncPosts++; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
+  await page.goto('/services')
+  await expect(page.locator('#hostinger-discovery')).toContainText('No Hostinger subscriptions were returned')
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Overview' }).click()
+  const summary = page.locator('.overview-snapshot')
+  await expect(summary).toContainText('USD 4.00')
+  amount = 9
+  hostingerRows = [{ externalId: 'cron-domain', name: 'Cron updated Hostinger service', status: 'expired', recurrenceInterval: null, recurrenceUnit: null, currency: 'USD', totalPrice: null, renewalPrice: null, isAutoRenewed: false, createdAt: capturedAt, expiresAt: null, nextBillingAt: null, linkedSubscriptionId: null, automaticallyLinked: false, excluded: false, possibleMatches: [], providerNameCollision: false, seenInLatestSync: true, renewalAvailable: false, upcomingCommitment: null }]
+  await page.evaluate(() => {
+    const current = Date.now()
+    Date.now = () => current + 16 * 60 * 1000
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await expect(summary).toContainText('USD 9.00')
+  expect(reads).toBe(2)
+  for (const [label, path] of [['Services', '/services'], ['Connections', '/connections'], ['History', '/history'], ['Overview', '/']] as const) {
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: label }).click()
+    await expect(page).toHaveURL(new RegExp(`${path === '/' ? '/?$' : `${path}/?$`}`))
+    if (path === '/services') {
+      await expect(page.locator('#hostinger-discovery')).toContainText('Cron updated Hostinger service')
+      await expect(page.getByRole('button', { name: 'Refresh providers' })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Reload cost data' })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Sync Hostinger subscriptions' })).toHaveCount(0)
+    }
+  }
+  expect(reads).toBe(2)
+  expect(syncPosts).toBe(0)
+})
+
+test('a persisted provider failure after reload offers an actionable retry and keeps prior data', async ({ page }) => {
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const periodStart = `${capturedAt.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(new Date(capturedAt).getUTCFullYear(), new Date(capturedAt).getUTCMonth() + 1, 1)).toISOString().slice(0, 10)
+  await mockLedger(page)
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: true, revision: 1 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
+  let failed = true
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [{ id: 'prior-aws', provider: 'aws', periodStart, periodEnd, amount: 7, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } }], providers: { aws: { status: failed ? 'error' : 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' } } } }))
+  let retries = 0
+  await page.route('**/api/costs/refresh*', route => { retries++; failed = false; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
+  await page.goto('/connections')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
+  await expect(card.getByText('Sync failed', { exact: true })).toBeVisible()
+  await expect(card).toContainText('Last successful data')
+  await card.getByRole('button', { name: 'Retry Amazon Web Services sync' }).click()
+  expect(retries).toBe(1)
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
+})
+
+test('connection-status read failures retain last known metered totals with an honest warning', async ({ page }) => {
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const periodStart = `${capturedAt.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(new Date(capturedAt).getUTCFullYear(), new Date(capturedAt).getUTCMonth() + 1, 1)).toISOString().slice(0, 10)
+  await mockLedger(page)
+  await page.route('**/api/connections', route => route.abort())
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [{ id: 'known-aws', provider: 'aws', periodStart, periodEnd, amount: 8, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } }], providers: { aws: { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' } } } }))
+  await page.goto('./')
+  await expect(page.locator('.overview-snapshot')).toContainText('USD 8.00')
+  await expect(page.locator('p[role="status"]').filter({ hasText: 'Connection status could not be checked' })).toBeVisible()
+})
+
 test('legacy hashes map safely and all routed screens fit at 375px', async ({ page }) => {
   test.setTimeout(60_000)
   await mockLedger(page)
@@ -266,8 +343,7 @@ test('connector catalog searches and filters supported versus planned providers 
   await expect(search).toBeVisible()
   const firstAvailable = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services' }) })
   await expect(firstAvailable.getByText('Not connected', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Reload connections' }).click()
-  await expect(page.getByRole('button', { name: 'Loading…' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Reload connections' })).toHaveCount(0)
   await search.focus()
   await expect(search).toBeFocused()
   await search.fill('DigitalOcean')
@@ -311,7 +387,7 @@ test('connection sync failure offers retry and then reports the latest successfu
   await aws.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
   await expect(aws.getByText('Sync failed', { exact: true })).toBeVisible()
   await aws.getByRole('button', { name: 'Retry Amazon Web Services sync' }).click()
-  await expect(aws.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(aws.getByText('Updated', { exact: true })).toBeVisible()
   await expect(aws).toContainText('Last billing sync')
   await page.goto('/')
   await revealProviderDetails(page)
@@ -432,11 +508,14 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
   await page.goto('./services')
   feed.snapshots[2]!.capturedAt = stale
   feed.providers.cloudflare.lastSyncedAt = stale
-  await infrastructure.getByRole('button', { name: 'Reload cost data' }).click()
   await expect(infrastructure.getByText(/Data is over 36 hours old/)).toBeVisible()
   fail = true
-  await infrastructure.getByRole('button', { name: 'Reload cost data' }).click()
-  await expect(infrastructure.getByRole('alert')).toContainText('Previous observations are still displayed')
+  await page.evaluate(() => {
+    const current = Date.now()
+    Date.now = () => current + 16 * 60 * 1000
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await expect(page.locator('.financial-refresh-warning')).toContainText('Previously displayed observations remain available')
   await expect(infrastructure.getByText('EC2', { exact: true })).toBeVisible()
   for (const width of [320, 768, 1024]) {
     await page.setViewportSize({ width, height: 1000 })
@@ -472,7 +551,7 @@ test('explicit legacy import backs up original JSON, preserves existing account 
 
 test('connections keep secrets request-only, preserve revisions, and automatically refresh providers', async ({ page }) => {
   await mockLedger(page)
-  let revision = 0, configured = false, refreshCalls = 0
+  let revision = 0, configured = false, refreshCalls = 0, synced = false
   await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured, revision }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
   await page.route('**/api/connections/aws', async route => {
     const request = route.request()
@@ -485,8 +564,14 @@ test('connections keep secrets request-only, preserve revisions, and automatical
     }
     return route.fulfill({ json: { configured, revision } })
   })
-  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: { aws: configured ? { status: 'synced', lastAttemptAt: new Date().toISOString(), lastSyncedAt: new Date().toISOString() } : { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
-  await page.route('**/api/costs/refresh*', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
+  const capturedAt = new Date().toISOString()
+  const periodStart = `${capturedAt.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(new Date(capturedAt).getUTCFullYear(), new Date(capturedAt).getUTCMonth() + 1, 1)).toISOString().slice(0, 10)
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: synced ? [
+    { id: 'aws-actual', provider: 'aws', periodStart, periodEnd, amount: 3, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+    { id: 'aws-forecast', provider: 'aws', periodStart, periodEnd, amount: 10, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
+  ] : [], providers: { aws: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: configured ? 'synced' : 'not-configured' }, cloudflare: { status: 'not-configured' } } } }))
+  await page.route('**/api/costs/refresh*', route => { expect(route.request().method()).toBe('POST'); refreshCalls++; synced = true; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
   await page.goto('./connections')
   const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services', exact: true }) })
   await expect(card.getByText('Not connected', { exact: true })).toBeVisible()
@@ -494,25 +579,45 @@ test('connections keep secrets request-only, preserve revisions, and automatical
   await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
   await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
   await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   expect(refreshCalls).toBe(1)
   await expect(card.getByLabel('Access key ID', { exact: true })).toHaveValue('')
   await expect(card.getByLabel('Secret access key', { exact: true })).toHaveValue('')
   expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('test-secret')
+  await page.goto('./')
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 3.00')
+  await expect(page.locator('.tracked-spending-card')).toContainText('USD 10.00')
   await page.goto('./services')
-  await page.locator('#infrastructure').getByRole('button', { name: 'Refresh providers', exact: true }).click()
-  await expect(page.locator('#infrastructure').getByRole('button', { name: 'Refresh providers', exact: true })).toBeEnabled()
+  expect(refreshCalls).toBe(1)
+  await page.goto('./connections')
+  await card.getByText('Advanced sync actions').click()
+  await card.getByRole('button', { name: 'Check for updates' }).click()
+  await expect(card.getByRole('button', { name: 'Check for updates' })).toBeVisible()
   expect(refreshCalls).toBe(2)
   await page.goto('./connections')
   page.on('dialog', dialog => dialog.accept())
   await card.getByRole('button', { name: 'Disconnect Amazon Web Services' }).click()
   await expect(card.getByText('Not connected', { exact: true })).toBeVisible()
+  expect(refreshCalls).toBe(2)
+  await page.goto('./')
+  await expect(page.locator('.overview-snapshot')).not.toContainText('USD 3.00')
+  await expect(page.locator('.overview-snapshot')).not.toContainText('USD 10.00')
+  await page.goto('./services')
+  await expect(page.locator('#infrastructure .provider-panel').first().getByText('Not connected')).toBeVisible()
+  await expect(page.locator('#infrastructure .usage-summary')).toHaveCount(0)
+  await page.goto('./history')
+  await expect(page.locator('#history')).toContainText('AWS')
+  await page.reload()
+  await page.goto('./')
+  await expect(page.locator('.overview-snapshot')).not.toContainText('USD 3.00')
+  await expect(page.locator('.overview-snapshot')).not.toContainText('USD 10.00')
+  await page.goto('./connections')
   await card.locator('summary').click()
   await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
   await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
   await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
-  expect(refreshCalls).toBe(4)
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
+  expect(refreshCalls).toBe(3)
   expect(revision).toBe(3)
   await page.setViewportSize({ width: 320, height: 1000 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
@@ -539,7 +644,7 @@ test('connecting AWS automatically updates Overview, Infrastructure and History 
   await card.getByLabel('Access key ID', { exact: true }).fill('test-key')
   await card.getByLabel('Secret access key', { exact: true }).fill('test-secret')
   await card.getByRole('button', { name: 'Save Amazon Web Services connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   await page.goto('./')
   await expect(page.locator('.tracked-spending-card')).toContainText('USD 120.00')
   await expect(page.locator('.tracked-spending-card')).toContainText('USD 3.00')
@@ -579,7 +684,7 @@ test('connecting Cloudflare shows actual spend prominently when no forecast is a
   await card.getByLabel('Account ID', { exact: true }).fill('test-account')
   await card.getByLabel('API token', { exact: true }).fill('test-token')
   await card.getByRole('button', { name: 'Save Cloudflare connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   await expect(card).toContainText('Next: review current charges in Overview and Infrastructure.')
   await page.goto('/')
   await expect(page.getByRole('link', { name: 'Manage connections' })).toBeVisible()
@@ -632,7 +737,7 @@ test('OpenAI organization costs connect with explicit admin scope and update Ove
   await card.locator('summary').click()
   await card.getByLabel('Organization Admin API key').fill('test-admin-key')
   await card.getByRole('button', { name: 'Save OpenAI API connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   await expect(card.getByLabel('Organization Admin API key')).toHaveValue('')
   await page.goto('./')
   await revealProviderDetails(page)
@@ -683,7 +788,7 @@ test('DigitalOcean imports finalized invoices on connect without counting previe
   await card.locator('summary').click()
   await card.getByLabel('Personal access token').fill('test-do-token')
   await card.getByRole('button', { name: 'Save DigitalOcean connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   await page.goto('./')
   await revealProviderDetails(page)
   const overview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /DigitalOcean/ }) })
@@ -707,6 +812,7 @@ test('provider details reuse saved actual and forecast observations without comb
   nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
   const periodEnd = nextMonth.toISOString().slice(0, 10)
   await mockLedger(page)
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: true, revision: 1 }, cloudflare: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
   await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [
     { id: 'detail-actual', provider: 'aws', periodStart, periodEnd, amount: 4.25, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
     { id: 'detail-forecast', provider: 'aws', periodStart, periodEnd, amount: 8.5, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
@@ -931,7 +1037,7 @@ test('connecting Hostinger automatically discovers subscriptions without pressin
   await card.locator('summary').click()
   await card.getByLabel('API token', { exact: true }).fill('hostinger-test-token')
   await card.getByRole('button', { name: 'Save Hostinger connection' }).click()
-  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   await expect(card).toContainText('Next: review eligible fixed renewals in Hostinger subscriptions below.')
   await page.goto('./services')
   await expect(page.locator('#hostinger-discovery')).toContainText('KVM from Hostinger')

@@ -1,26 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { latestCostSnapshots, normalizeUsageAmount, trackedSpendingTotals, usageTotals, type CostBreakdown, type CostProvider, type CostSnapshot } from '../domain/usage-costs'
 import type { CurrencyTotal } from '../domain/subscriptions'
-import { currentCostSnapshots, emptyCostFeed, parseCostFeed, isProviderStale, type CostFeed } from '../lib/cost-feed'
+import { currentCostSnapshots, isProviderStale, type CostFeed } from '../lib/cost-feed'
 
-import { ConnectionApiError, refreshProviders } from '../lib/connection-api'
-
-const props = defineProps<{ fixedTotals: CurrencyTotal[]; configuredProviders: CostProvider[]; today: string; initialFeed: CostFeed; hasInitialFeed: boolean }>()
-const emit = defineEmits<{ loaded: [feed: CostFeed]; details: [provider: CostProvider] }>()
+const props = defineProps<{ fixedTotals: CurrencyTotal[]; today: string; initialFeed: CostFeed; configuredProviders: readonly CostProvider[] }>()
+const emit = defineEmits<{ details: [provider: CostProvider] }>()
 const feed = ref(props.initialFeed)
-const loading = ref(false)
-const error = ref('')
-const refreshing = ref(false)
-const refreshError = ref('')
-const expired = ref(false)
 const providers: CostProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean']
-let feedLoaded = props.hasInitialFeed
-let staleRefreshStarted = false
-const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
+const activeSnapshots = computed(() => currentCostSnapshots(feed.value).filter(row => props.configuredProviders.includes(row.provider)))
 const totals = computed(() => usageTotals(activeSnapshots.value, props.today, forecastProviders.value))
 const latest = computed(() => latestCostSnapshots(activeSnapshots.value).filter(row => row.kind === 'actual' && (row.metadata?.period === 'current' || row.metadata?.scope === 'finalized-invoice-total')))
-const connectedProviders = computed(() => providers.filter(provider => feed.value.providers[provider].status !== 'not-configured'))
+const connectedProviders = computed(() => providers.filter(provider => props.configuredProviders.includes(provider)))
 // DigitalOcean reports finalized invoice periods, not a current-month forecast; it must not suppress other providers' projections.
 const forecastProviders = computed(() => connectedProviders.value.filter(provider => provider !== 'digitalocean'))
 const combined = computed(() => trackedSpendingTotals(props.fixedTotals, totals.value, forecastProviders.value, activeSnapshots.value))
@@ -59,52 +50,13 @@ function forecast(provider: CostProvider, currency: string) {
   return rows.find(row => row.kind === 'forecast' && row.currency === currency && Date.parse(row.capturedAt) === newest)
 }
 function breakdown(value: unknown): readonly CostBreakdown[] { return Array.isArray(value) ? value as CostBreakdown[] : [] }
-async function reload() {
-  if (loading.value) return
-  loading.value = true
-  try {
-    const response = await fetch('/api/costs', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15_000) })
-    if (response.status === 401) throw new ConnectionApiError('Your session expired. Sign in again, then reload.', 401)
-    if (!response.ok) throw new Error('Cost data unavailable')
-    feed.value = parseCostFeed(await response.json()); error.value = ''; expired.value = false; emit('loaded', feed.value)
-    feedLoaded = true
-  }
-  catch (cause) { expired.value = cause instanceof ConnectionApiError && cause.status === 401; error.value = expired.value ? 'Your session expired. Sign in again, then reload.' : 'Infrastructure data could not be loaded. Previous observations are still displayed. Try again.' }
-  finally { loading.value = false }
-}
-async function refresh(provider?: CostProvider) {
-  if (refreshing.value || loading.value) return
-  refreshing.value = true; refreshError.value = ''
-  try { await refreshProviders(provider); await reload() }
-  catch (cause) { refreshError.value = cause instanceof Error ? cause.message : 'Provider refresh failed. Previous observations are retained.'; expired.value = cause instanceof ConnectionApiError && cause.status === 401 }
-  finally { refreshing.value = false }
-}
-async function refreshStaleProviders() {
-  if (!feedLoaded || staleRefreshStarted) return
-  const now = Date.now()
-  const stale = props.configuredProviders.filter(provider => {
-    const status = feed.value.providers[provider]
-    const lastAttempt = status.lastAttemptAt ? Date.parse(status.lastAttemptAt) : 0
-    const hasNoSuccessfulSync = !status.lastSyncedAt
-    return (hasNoSuccessfulSync || isProviderStale(status)) && now - lastAttempt >= 6 * 60 * 60 * 1000
-  })
-  if (!stale.length) return
-  staleRefreshStarted = true
-  await refresh(stale.length === providers.length ? undefined : stale[0])
-}
-defineExpose({ reload })
-let timer: ReturnType<typeof setInterval> | undefined
-onMounted(async () => { if (!feedLoaded) await reload(); else emit('loaded', feed.value); void refreshStaleProviders(); timer = setInterval(() => { if (!refreshing.value) void reload() }, 15 * 60 * 1000) })
-onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
-watch(() => props.configuredProviders.join(','), () => { void refreshStaleProviders() })
+watch(() => props.initialFeed, next => { feed.value = next })
 </script>
 
 <template>
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
-    <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><div class="provider-refresh-actions"><button type="button" class="secondary-button" :disabled="loading || refreshing" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button><button type="button" class="primary-button" :disabled="loading || refreshing" @click="refresh()">{{ refreshing ? 'Refreshing…' : 'Refresh providers' }}</button></div></div>
+    <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div></div>
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
-    <p class="metric-note refresh-description">Refresh providers fetches reported costs from connected AWS, Cloudflare, OpenAI API and DigitalOcean accounts. DigitalOcean provides finalized invoice totals only; previews, estimates, balances and cash events are not included. Reload cost data reads stored observations.</p>
-    <p v-if="error" role="alert" class="feed-warning">{{ error }}</p><p v-if="refreshError" role="alert" class="feed-warning">{{ refreshError }}</p><p v-if="expired"><a href="/login">Sign in</a></p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
         <p class="eyebrow">{{ total.currency }} · current reported period</p><strong>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</strong><span>Actual metered spend</span>
@@ -118,7 +70,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
     </div>
     <div class="provider-grid">
       <article v-for="provider in providers" :key="provider" class="provider-panel">
-        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ name(provider) }}</button></h3></div><span class="status-label" :class="feed.providers[provider].status">{{ feed.providers[provider].status === 'not-configured' ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
+        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ name(provider) }}</button></h3></div><span class="status-label" :class="!configuredProviders.includes(provider) ? 'not-configured' : feed.providers[provider].status">{{ !configuredProviders.includes(provider) ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
         <p v-if="feed.providers[provider].error" class="feed-warning" role="status">{{ feed.providers[provider].error }}</p>
         <p v-if="isProviderStale(feed.providers[provider])" class="feed-warning">Data is over 36 hours old. The last successful observations are retained.</p>
         <template v-if="current(provider).length">
@@ -133,7 +85,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
             <dl v-if="breakdown(snapshot.metadata?.breakdown).length" class="service-breakdown"><div v-for="service in breakdown(snapshot.metadata?.breakdown)" :key="service.service"><dt>{{ service.service }}</dt><dd>{{ money(service.amount, service.currency) }}</dd></div></dl>
           </div>
         </template>
-        <p v-else class="provider-empty">{{ feed.providers[provider].status === 'not-configured' ? 'Connect your account to see reported usage costs here.' : 'No reported charges are available yet.' }}</p>
+        <p v-else class="provider-empty">{{ !configuredProviders.includes(provider) ? 'Connect your account to see reported usage costs here.' : 'No reported charges are available yet.' }}</p>
         <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>

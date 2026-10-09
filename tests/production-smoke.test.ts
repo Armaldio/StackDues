@@ -4,9 +4,11 @@ import { verifyAuthenticationBoundary } from '../scripts/production-smoke.mjs'
 
 test('production auth smoke checks require the login redirect and anonymous API denials', async () => {
   const paths: string[] = []
-  const fetchImpl = async (input: URL | RequestInfo) => {
+  const accepts: string[] = []
+  const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = new URL(String(input))
     paths.push(url.pathname)
+    accepts.push(new Headers(init?.headers).get('accept') ?? '')
 
     if (url.pathname === '/') return new Response(null, { status: 303, headers: { location: '/login' } })
     if (url.pathname === '/login') return new Response('login page', { status: 200 })
@@ -20,6 +22,7 @@ test('production auth smoke checks require the login redirect and anonymous API 
   })
 
   assert.deepEqual(paths, ['/', '/login', '/api/costs', '/api/subscriptions'])
+  assert.deepEqual(accepts, ['text/html', 'text/html', 'application/json', 'application/json'])
 })
 
 test('production auth smoke checks reject a leaked private API response without logging its body', async () => {
