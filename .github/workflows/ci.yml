@@ -117,6 +117,7 @@ jobs:
           fi
           echo "current=true" >> "$GITHUB_OUTPUT"
       - name: Deploy tested Worker commit
+        id: deploy-worker
         if: steps.deploy-guard.outputs.current == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -131,7 +132,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           MIGRATIONS_CURRENT: ${{ steps.migrations.outputs.current }}
           DEPLOY_CURRENT: ${{ steps.deploy-guard.outputs.current }}
-          DEPLOY_OUTCOME: ${{ steps.deploy-production.outcome }}
+          DEPLOY_OUTCOME: ${{ steps.deploy-worker.outcome }}
           SMOKE_OUTCOME: ${{ steps.auth-smoke.outcome }}
         run: |
           {
