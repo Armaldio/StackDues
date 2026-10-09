@@ -106,6 +106,7 @@ onUnmounted(() => {
 })
 const showForm = ref(false)
 const editing = ref<StoredSubscription>()
+let lastFormTrigger: HTMLElement | null = null
 const search = ref('')
 const statusFilter = ref('all')
 const serviceSelection = ref<ServiceSelection | null>(null)
@@ -163,8 +164,9 @@ async function closeServiceDetails() {
 }
 function editDetailedSubscription(item: Subscription) {
   const stored = subscriptions.value.find(candidate => candidate.id === item.id)
+  const trigger = lastDetailTrigger
   void closeServiceDetails()
-  if (stored) openForm(stored)
+  if (stored) openForm(stored, trigger ?? undefined)
 }
 const hasConfiguredProvider = computed(() => connectionStatuses.value ? Object.values(connectionStatuses.value).some(status => status.configured) : Object.values(costFeed.value.providers).some(status => status.status !== 'not-configured') || (!!hostingerState.value && hostingerState.value.sync.status !== 'not-configured'))
 const totals = computed(() => normalizedTotals(subscriptions.value))
@@ -222,7 +224,21 @@ function periodDescription(provider: 'aws' | 'cloudflare' | 'openai', currency: 
   return [...new Set(periods.map(row => `${row.periodStart}–${row.periodEnd}${row.metadata?.reportedThrough ? ` · reported through ${String(row.metadata.reportedThrough).slice(0, 10)}` : ''}`))].join(', ')
 }
 function recurrence(item: Subscription) { return `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` }
-function openForm(item?: StoredSubscription) { if (blocked.value) return; editing.value = item; showForm.value = true }
+function openForm(item?: StoredSubscription, trigger?: HTMLElement) {
+  if (blocked.value) return
+  const target = trigger ?? document.activeElement
+  lastFormTrigger = target instanceof HTMLElement ? target : null
+  editing.value = item; showForm.value = true
+}
+async function closeForm() {
+  showForm.value = false
+  await nextTick()
+  restoreFormFocus()
+}
+function restoreFormFocus() {
+  if (!showForm.value && !busy.value && lastFormTrigger?.isConnected && !lastFormTrigger.matches(':disabled')) lastFormTrigger.focus()
+  if (!showForm.value && !busy.value) lastFormTrigger = null
+}
 function mutationError(cause: unknown) { storageError.value = cause instanceof Error ? cause.message : 'Changes could not be confirmed. Reload before making changes.' }
 async function save(item: Subscription) {
   if (blocked.value) return
@@ -231,9 +247,9 @@ async function save(item: Subscription) {
     const saved = editing.value ? await updateStoredSubscription(item, editing.value.revision) : await createStoredSubscription(item)
     if (saved.id !== item.id) throw new Error('The saved subscription could not be confirmed. Reload before making changes.')
     subscriptions.value = subscriptions.value.some(({ id }) => id === saved.id) ? subscriptions.value.map(existing => existing.id === saved.id ? saved : existing) : [...subscriptions.value, saved]
-    storageError.value = null; notice.value = `${item.name} saved.`; showForm.value = false
+    storageError.value = null; notice.value = `${item.name} saved.`; await closeForm()
   } catch (cause) { mutationError(cause) }
-  finally { busy.value = false }
+  finally { busy.value = false; await nextTick(); restoreFormFocus() }
 }
 async function setStatus(item: StoredSubscription) {
   if (blocked.value) return
@@ -373,7 +389,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
         <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No manual subscriptions yet</h3><p>Connect a provider above to sync your costs, or add services such as Bitwarden Premium and ChatGPT Plus yourself.</p></div>
-        <div v-else-if="subscriptions.length" class="table-scroll"><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: item.id }, $event)"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></button></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
+        <div v-else-if="subscriptions.length" class="table-scroll" role="region" tabindex="0" aria-label="Subscriptions table. Scroll horizontally to view all columns."><p class="table-scroll-hint" aria-hidden="true">Scroll horizontally to view all columns</p><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: item.id }, $event)"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></button></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
       <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
       <KeepAlive><HostingerDiscovery v-if="currentSection === 'services' && hostingerStateResolved" :initial="hostingerState" :ledger="subscriptions" @changed="reloadLedger" @loaded="setHostingerState" /></KeepAlive>
@@ -387,6 +403,6 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       <footer class="app-footer"><span>StackDues</span><p>Fixed subscriptions are saved privately to your account. Existing browser data remains untouched.</p></footer>
     </main>
   </div>
-  <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-error="storageError" :saving="busy" :aria-busy="busy" @save="save" @close="showForm = false" />
+  <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-error="storageError" :saving="busy" :aria-busy="busy" @save="save" @close="closeForm" />
   <ServiceDetail v-if="serviceSelection" :selection="serviceSelection" :feed="costFeed" :subscriptions="subscriptions" :subscriptions-loaded="loaded" :today="today" :hostinger-sync="hostingerState?.sync" :hostinger-rows="hostingerState?.subscriptions" @close="closeServiceDetails" @edit="editDetailedSubscription" />
 </template>
