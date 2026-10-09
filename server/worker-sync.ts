@@ -1,6 +1,7 @@
 import { LedgerError, persistProviderSync, readCostFeed } from './data/ledger.ts'
 import { createAwsClient, fetchAwsCosts, type AwsClientCredentials, type AwsCostClient } from './providers/aws.ts'
 import { collectCloudflareCosts } from './providers/cloudflare.ts'
+import { collectOpenAiCosts } from './providers/openai.ts'
 import { loadProviderCredentials } from './security/provider-credentials.ts'
 import { emptyCostSyncState, refreshCosts, type CostConnector } from './sync.ts'
 import type { CostFeed } from '../src/lib/cost-feed.ts'
@@ -15,9 +16,9 @@ export type CostSyncDependencies = {
 }
 
 /** Manual refresh and scheduled execution use the same collection and persistence path. */
-export async function syncCosts(env: CostSyncBindings, now = new Date(), dependencies: CostSyncDependencies = {}, selectedProviders: readonly CostProvider[] = ['aws', 'cloudflare']): Promise<CostFeed> {
+export async function syncCosts(env: CostSyncBindings, now = new Date(), dependencies: CostSyncDependencies = {}, selectedProviders: readonly CostProvider[] = ['aws', 'cloudflare', 'openai']): Promise<CostFeed> {
   if (!env.DB || !Number.isFinite(now.getTime())) throw new LedgerError(503, 'Cost refresh is unavailable. Try again later.')
-  if (!selectedProviders.length || selectedProviders.some(provider => !['aws', 'cloudflare'].includes(provider)) || new Set(selectedProviders).size !== selectedProviders.length) throw new LedgerError(400, 'Choose one or more supported providers to refresh.')
+  if (!selectedProviders.length || selectedProviders.some(provider => !['aws', 'cloudflare', 'openai'].includes(provider)) || new Set(selectedProviders).size !== selectedProviders.length) throw new LedgerError(400, 'Choose one or more supported providers to refresh.')
   const load = dependencies.loadCredentials ?? loadProviderCredentials
   async function connector(provider: CostProvider): Promise<CostConnector> {
     try {
@@ -27,8 +28,14 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
           client: (dependencies.awsClient ?? createAwsClient)(credentials!), now, timeoutMs: dependencies.timeoutMs,
         }) }
       }
-      const credentials = await load(env.DB, 'cloudflare', env.CREDENTIALS_KEY)
-      return { provider, configured: credentials !== null, collect: () => collectCloudflareCosts({
+      if (provider === 'cloudflare') {
+        const credentials = await load(env.DB, 'cloudflare', env.CREDENTIALS_KEY)
+        return { provider, configured: credentials !== null, collect: () => collectCloudflareCosts({
+          ...credentials!, now, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs,
+        }) }
+      }
+      const credentials = await load(env.DB, 'openai', env.CREDENTIALS_KEY)
+      return { provider, configured: credentials !== null, collect: () => collectOpenAiCosts({
         ...credentials!, now, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs,
       }) }
     } catch {

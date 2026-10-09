@@ -42,7 +42,7 @@ function kind(snapshot: CostSnapshot) {
     <div v-if="!snapshots.length" class="quiet-empty"><h3>No cost history yet</h3><p>Connect a provider to see reported spend over time.</p></div>
     <template v-else>
       <div class="history-controls" role="group" aria-label="Filter cost history">
-        <label>Provider<select v-model="providerFilter"><option value="all">All providers</option><option value="aws">AWS</option><option value="cloudflare">Cloudflare</option></select></label>
+        <label>Provider<select v-model="providerFilter"><option value="all">All providers</option><option value="aws">AWS</option><option value="cloudflare">Cloudflare</option><option value="openai">OpenAI API</option></select></label>
         <label>Type<select v-model="kindFilter"><option value="all">All types</option><option value="actual">Actual</option><option value="forecast">Forecast</option></select></label>
         <label>Currency<select v-model="currencyFilter"><option value="all">All currencies</option><option v-for="currency in currencies" :key="currency" :value="currency">{{ currency }}</option></select></label>
         <button class="secondary-button" type="button" :aria-pressed="showPreviousCaptures" @click="showPreviousCaptures = !showPreviousCaptures">{{ showPreviousCaptures ? 'Hide previous captures' : 'Show previous captures' }}</button>
@@ -50,7 +50,7 @@ function kind(snapshot: CostSnapshot) {
       <p v-if="!observations.length" class="quiet-empty">No observations match these filters.</p>
       <template v-else>
         <p class="history-count" role="status">Showing {{ visible.length }} of {{ observations.length }} {{ showPreviousCaptures ? 'captures' : 'latest observations' }}.</p>
-        <div class="table-scroll"><table><caption class="sr-only">Provider-reported cost observations; captures are not summed</caption><thead><tr><th scope="col">Captured</th><th scope="col">Provider</th><th scope="col">Reported period</th><th scope="col">Type</th><th scope="col">Amount</th></tr></thead><tbody><tr v-for="snapshot in visible" :key="snapshot.id"><td>{{ captured(snapshot.capturedAt) }}</td><td>{{ snapshot.provider === 'aws' ? 'AWS' : 'Cloudflare' }}</td><td>{{ period(snapshot) }}<span class="cell-note">{{ snapshot.periodStart }} → {{ snapshot.periodEnd }} (end exclusive)</span></td><td><span class="status-pill">{{ kind(snapshot) }}</span></td><td class="amount">{{ money(snapshot.amount, snapshot.currency) }}</td></tr></tbody></table></div>
+        <div class="table-scroll"><table><caption class="sr-only">Provider-reported cost observations; captures are not summed</caption><thead><tr><th scope="col">Captured</th><th scope="col">Provider</th><th scope="col">Reported period</th><th scope="col">Type</th><th scope="col">Amount</th></tr></thead><tbody><tr v-for="snapshot in visible" :key="snapshot.id"><td>{{ captured(snapshot.capturedAt) }}</td><td>{{ snapshot.provider === 'aws' ? 'AWS' : snapshot.provider === 'cloudflare' ? 'Cloudflare' : 'OpenAI API' }}</td><td>{{ period(snapshot) }}<span class="cell-note">{{ snapshot.periodStart }} → {{ snapshot.periodEnd }} (end exclusive)</span></td><td><span class="status-pill">{{ kind(snapshot) }}</span></td><td class="amount">{{ money(snapshot.amount, snapshot.currency) }}</td></tr></tbody></table></div>
         <button v-if="visible.length < observations.length" class="secondary-button history-more" type="button" @click="visibleLimit += 30">Show more older entries</button>
       </template>
     </template>

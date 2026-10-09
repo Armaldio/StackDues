@@ -51,7 +51,7 @@ export async function refreshCosts(
       providers[connector.provider] = {
         ...previous.providers[connector.provider], status: 'error', lastAttemptAt: attemptedAt,
         // Provider errors can contain authorization headers or SDK request details.
-        error: `${connector.provider === 'aws' ? 'AWS' : 'Cloudflare'} refresh failed. Check server configuration and retry.`,
+        error: `${connector.provider === 'aws' ? 'AWS' : connector.provider === 'cloudflare' ? 'Cloudflare' : 'OpenAI'} refresh failed. Check server configuration and retry.`,
       }
     }
   })

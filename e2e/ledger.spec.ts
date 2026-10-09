@@ -120,10 +120,10 @@ test('connector catalog searches and filters supported versus planned providers 
   await expect(page.getByText('No providers match your search.')).toBeVisible()
   await search.fill('')
   await page.getByLabel('Provider availability').selectOption('coming-soon')
-  await expect(page.locator('.coming-soon-card')).toHaveCount(3)
+  await expect(page.locator('.coming-soon-card')).toHaveCount(2)
   await expect(supportedCards).toHaveCount(0)
   await page.getByLabel('Provider availability').selectOption('available')
-  await expect(supportedCards).toHaveCount(3)
+  await expect(supportedCards).toHaveCount(4)
   const aws = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Amazon Web Services' }) })
   await expect(aws).toContainText('Actual usage, comparable period and full-month forecast when available')
   await expect(aws).toContainText('Cost Explorer read-only')
@@ -404,6 +404,51 @@ test('connecting Cloudflare shows actual spend prominently when no forecast is a
   await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$8.00')
   await expect(page.locator('#history')).toContainText('Cloudflare')
   expect(syncCalls).toBe(1)
+})
+
+test('OpenAI organization costs connect with explicit admin scope and update Overview, Infrastructure and History', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  await mockLedger(page)
+  let configured = false, synced = false
+  await page.route('**/api/connections', route => route.fulfill({ json: {
+    aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 },
+    openai: { configured, revision: configured ? 1 : 0 },
+  } }))
+  await page.route('**/api/connections/openai', async route => {
+    expect(route.request().postDataJSON()).toEqual({ credentials: { adminApiKey: 'test-admin-key' }, revision: 0 })
+    configured = true
+    return route.fulfill({ json: { configured: true, revision: 1 } })
+  })
+  await page.route('**/api/costs', route => route.fulfill({ json: {
+    snapshots: synced ? [{
+      id: 'openai-actual', provider: 'openai', periodStart: today, periodEnd: new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10),
+      amount: 4.75, currency: 'USD', kind: 'actual', capturedAt,
+      metadata: { period: 'current', scope: 'organization-api-costs', reportedThrough: capturedAt, breakdown: [{ service: 'Responses · proj_test', amount: 4.75, currency: 'USD' }] },
+    }] : [],
+    providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' }, openai: synced ? { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } : { status: 'not-configured' } },
+  } }))
+  await page.route('**/api/costs/refresh*', async route => {
+    expect(new URL(route.request().url()).searchParams.get('provider')).toBe('openai')
+    synced = true
+    return route.fulfill({ json: { providers: { openai: { status: 'synced' } } } })
+  })
+  await page.goto('./')
+  const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'OpenAI API', exact: true }) })
+  await expect(card).toContainText('Organization Admin API key')
+  await expect(card).toContainText('ChatGPT Plus is not included')
+  await card.locator('summary').click()
+  await card.getByLabel('Organization Admin API key').fill('test-admin-key')
+  await card.getByRole('button', { name: 'Save OpenAI API connection' }).click()
+  await expect(card.getByText('Synced', { exact: true })).toBeVisible()
+  await expect(card.getByLabel('Organization Admin API key')).toHaveValue('')
+  const overview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /OpenAI API/ }) })
+  await expect(overview).toContainText('USD 4.75')
+  await expect(overview).toContainText('Forecast unavailable')
+  await expect(page.locator('#infrastructure')).toContainText('Organization-reported API costs')
+  await expect(page.locator('#infrastructure')).toContainText('$4.75')
+  await expect(page.locator('#history')).toContainText('OpenAI API')
+  expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain('test-admin-key')
 })
 
 test('cost history defaults to latest observations, filters currencies and periods, and reveals older captures on demand', async ({ page }) => {

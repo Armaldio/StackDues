@@ -1,15 +1,16 @@
 import { LedgerError } from '../data/ledger.ts'
 
-export type CredentialProvider = 'aws' | 'cloudflare' | 'hostinger'
+export type CredentialProvider = 'aws' | 'cloudflare' | 'hostinger' | 'openai'
 export type AwsCredentials = { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
 export type CloudflareCredentials = { accountId: string; apiToken: string }
 export type HostingerCredentials = { apiToken: string }
-export type ProviderCredentials = { aws: AwsCredentials; cloudflare: CloudflareCredentials; hostinger: HostingerCredentials }
+export type OpenAiCredentials = { adminApiKey: string }
+export type ProviderCredentials = { aws: AwsCredentials; cloudflare: CloudflareCredentials; hostinger: HostingerCredentials; openai: OpenAiCredentials }
 export type ConnectionStatus = { configured: boolean; revision: number; updatedAt?: string }
 export type ConnectionStatuses = Record<CredentialProvider, ConnectionStatus>
 type CredentialRow = { provider: CredentialProvider; version: number; iv: string | null; ciphertext: string | null; revision: number; updated_at: string }
 type StatusRow = { provider: CredentialProvider; configured: number; revision: number; updated_at: string }
-const providers = ['aws', 'cloudflare', 'hostinger'] as const
+const providers = ['aws', 'cloudflare', 'hostinger', 'openai'] as const
 const statusColumns = 'provider, ciphertext IS NOT NULL AS configured, revision, updated_at'
 const encoder = new TextEncoder()
 
@@ -22,7 +23,7 @@ export function validateProviderCredentials<P extends CredentialProvider>(provid
   const invalid = () => { throw new LedgerError(400, 'Check the required provider credential fields and their lengths.') }
   if (!input || typeof input !== 'object' || Array.isArray(input)) return invalid()
   const record = input as Record<string, unknown>
-  const fields = provider === 'aws' ? ['accessKeyId', 'secretAccessKey', 'sessionToken'] : provider === 'cloudflare' ? ['accountId', 'apiToken'] : ['apiToken']
+  const fields = provider === 'aws' ? ['accessKeyId', 'secretAccessKey', 'sessionToken'] : provider === 'cloudflare' ? ['accountId', 'apiToken'] : provider === 'openai' ? ['adminApiKey'] : ['apiToken']
   if (Object.keys(record).some(field => !fields.includes(field))) return invalid()
   function text(field: string, limit: number): string {
     const value = record[field]
@@ -35,6 +36,7 @@ export function validateProviderCredentials<P extends CredentialProvider>(provid
     if (!/^[a-f\d]{32}$/i.test(accountId)) return invalid()
     return { accountId: accountId.toLowerCase(), apiToken: text('apiToken', 4096) } as ProviderCredentials[P]
   }
+  if (provider === 'openai') return { adminApiKey: text('adminApiKey', 4096) } as ProviderCredentials[P]
   return { apiToken: text('apiToken', 4096) } as ProviderCredentials[P]
 }
 function expectedRevision(input: unknown, allowZero = false): number {
@@ -61,7 +63,7 @@ async function storage<T>(operation: () => Promise<T>): Promise<T> {
 export async function listProviderConnections(db: D1Database): Promise<ConnectionStatuses> {
   return storage(async () => {
     const result = await db.prepare(`SELECT ${statusColumns} FROM provider_credentials`).all<StatusRow>()
-    const statuses: ConnectionStatuses = { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } }
+    const statuses: ConnectionStatuses = { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 } }
     for (const row of result.results) statuses[row.provider] = status(row)
     return statuses
   })

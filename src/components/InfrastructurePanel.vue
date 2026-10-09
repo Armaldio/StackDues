@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { latestCostSnapshots, trackedSpendingTotals, usageTotals, type CostBreakdown, type CostProvider } from '../domain/usage-costs'
+import { latestCostSnapshots, normalizeUsageAmount, trackedSpendingTotals, usageTotals, type CostBreakdown, type CostProvider, type CostSnapshot } from '../domain/usage-costs'
 import type { CurrencyTotal } from '../domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, parseCostFeed, isProviderStale, type CostFeed } from '../lib/cost-feed'
 
@@ -14,7 +14,7 @@ const error = ref('')
 const refreshing = ref(false)
 const refreshError = ref('')
 const expired = ref(false)
-const providers: CostProvider[] = ['aws', 'cloudflare']
+const providers: CostProvider[] = ['aws', 'cloudflare', 'openai']
 let feedLoaded = false
 let staleRefreshStarted = false
 const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
@@ -24,11 +24,29 @@ const connectedProviders = computed(() => providers.filter(provider => feed.valu
 const combined = computed(() => trackedSpendingTotals(props.fixedTotals, totals.value, connectedProviders.value, activeSnapshots.value))
 function money(amount: number, currency: string) { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount) }
 function date(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
-function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : 'Cloudflare' }
-function current(provider: CostProvider) {
+function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : provider === 'cloudflare' ? 'Cloudflare' : 'OpenAI API' }
+function current(provider: CostProvider): CostSnapshot[] {
   const rows = latest.value.filter(row => row.provider === provider)
   const newest = Math.max(...rows.map(row => Date.parse(row.capturedAt)))
-  return rows.filter(row => Date.parse(row.capturedAt) === newest)
+  const captured = rows.filter(row => Date.parse(row.capturedAt) === newest)
+  if (provider !== 'openai') return captured
+  const byCurrency = new Map<string, (typeof captured)[number][]>()
+  for (const row of captured) byCurrency.set(row.currency, [...(byCurrency.get(row.currency) ?? []), row])
+  return [...byCurrency].map(([currency, group]) => {
+    const services = new Map<string, number>()
+    for (const row of group) for (const item of breakdown(row.metadata?.breakdown)) {
+      services.set(item.service, normalizeUsageAmount((services.get(item.service) ?? 0) + item.amount))
+    }
+    const reportedThrough = group.map(row => row.metadata?.reportedThrough).filter((value): value is string => typeof value === 'string').sort().at(-1)
+    return {
+      ...group[0]!,
+      id: `openai:current:${currency}:${newest}`,
+      periodStart: group.map(row => row.periodStart).sort()[0]!,
+      periodEnd: group.map(row => row.periodEnd).sort().at(-1)!,
+      amount: normalizeUsageAmount(group.reduce((sum, row) => sum + row.amount, 0)),
+      metadata: { period: 'current', scope: 'organization-api-costs', ...(reportedThrough ? { reportedThrough } : {}), breakdown: [...services].map(([service, amount]) => ({ service, amount, currency })) },
+    } as CostSnapshot
+  })
 }
 function previous(provider: CostProvider, currency: string) {
   return latestCostSnapshots(feed.value.snapshots).filter(row => row.provider === provider && row.currency === currency && row.metadata?.period === 'previous-comparable').at(-1)
@@ -83,7 +101,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
     <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div><div class="provider-refresh-actions"><button type="button" class="secondary-button" :disabled="loading || refreshing" @click="reload">{{ loading ? 'Loading…' : 'Reload cost data' }}</button><button type="button" class="primary-button" :disabled="loading || refreshing" @click="refresh()">{{ refreshing ? 'Refreshing…' : 'Refresh providers' }}</button></div></div>
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
-    <p class="metric-note refresh-description">Refresh providers fetches new usage from connected AWS and Cloudflare accounts. Reload cost data reads the stored observations.</p>
+    <p class="metric-note refresh-description">Refresh providers fetches new reported costs from connected AWS, Cloudflare and OpenAI API accounts. Reload cost data reads the stored observations.</p>
     <p v-if="error" role="alert" class="feed-warning">{{ error }}</p><p v-if="refreshError" role="alert" class="feed-warning">{{ refreshError }}</p><p v-if="expired"><a href="/login">Sign in</a></p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
@@ -98,12 +116,12 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
     </div>
     <div class="provider-grid">
       <article v-for="provider in providers" :key="provider" class="provider-panel">
-        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : 'c' }}</span><h3>{{ name(provider) }}</h3></div><span class="status-label" :class="feed.providers[provider].status">{{ feed.providers[provider].status === 'not-configured' ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
+        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3>{{ name(provider) }}</h3></div><span class="status-label" :class="feed.providers[provider].status">{{ feed.providers[provider].status === 'not-configured' ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
         <p v-if="feed.providers[provider].error" class="feed-warning" role="status">{{ feed.providers[provider].error }}</p>
         <p v-if="isProviderStale(feed.providers[provider])" class="feed-warning">Data is over 36 hours old. The last successful observations are retained.</p>
         <template v-if="current(provider).length">
           <div v-for="snapshot in current(provider)" :key="snapshot.id" class="provider-cost">
-            <strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><span>{{ provider === 'cloudflare' ? 'Billing period to date' : 'Month to date' }}</span>
+            <strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><span>{{ provider === 'cloudflare' ? 'Billing period to date' : provider === 'openai' ? 'Organization-reported API costs · month to date' : 'Month to date' }}</span>
             <p>{{ snapshot.periodStart }} → {{ snapshot.periodEnd }} (end exclusive)</p>
             <p v-if="previous(provider, snapshot.currency)">{{ money(previous(provider, snapshot.currency)!.amount, snapshot.currency) }} in the comparable previous-month period</p>
             <p v-if="forecast(provider, snapshot.currency)">{{ money(forecast(provider, snapshot.currency)!.amount, snapshot.currency) }} whole-month forecast</p>
