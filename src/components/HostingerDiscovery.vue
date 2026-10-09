@@ -3,9 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 import type { StoredSubscription } from '../lib/subscription-api'
 import { addHostingerSubscription, HostingerApiError, linkHostingerSubscription, readHostingerDiscovery, setHostingerSubscriptionExcluded, syncHostinger, type HostingerDiscovery as Discovery } from '../lib/hostinger-api'
 
-const props = defineProps<{ ledger: StoredSubscription[]; configured: boolean }>()
+const props = defineProps<{ ledger: StoredSubscription[]; configured: boolean; initial?: Discovery }>()
 const emit = defineEmits<{ changed: []; loaded: [value: Discovery] }>()
-const state = ref<Discovery>()
+const state = ref<Discovery | undefined>(props.initial)
 const loading = ref(false)
 const busyId = ref('')
 const error = ref('')
@@ -27,7 +27,7 @@ async function load() {
   if (loading.value || busyId.value) return
   loading.value = true
   try {
-    let next = await readHostingerDiscovery()
+    let next = state.value ?? await readHostingerDiscovery()
     const lastAttempt = next.sync.lastAttemptAt ?? next.sync.lastSyncedAt
     const elapsed = lastAttempt ? Date.now() - Date.parse(lastAttempt) : Infinity
     if (props.configured && elapsed >= 6 * 60 * 60 * 1000) { next = await syncHostinger(); emit('changed') }
@@ -74,7 +74,14 @@ async function link(item: Discovery['subscriptions'][number]) {
   } catch (cause) { fail(cause) }
   finally { busyId.value = '' }
 }
-onMounted(load)
+onMounted(() => {
+  if (!state.value) void load()
+  else {
+    emit('loaded', state.value)
+    const lastAttempt = state.value.sync.lastAttemptAt ?? state.value.sync.lastSyncedAt
+    if (props.configured && (!lastAttempt || Date.now() - Date.parse(lastAttempt) >= 6 * 60 * 60 * 1000)) void load()
+  }
+})
 defineExpose({ reload: load })
 watch(() => props.configured, configured => { if (configured) void load() })
 </script>

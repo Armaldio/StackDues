@@ -4,6 +4,8 @@ import { createSession, hashPassword, secureEqual, SESSION_COOKIE, SESSION_MAX_A
 export type AuthBindings = CloudflareEnv & { SESSION_SECRET?: string; SETUP_TOKEN?: string }
 type Owner = { email: string; password_hash: string }
 const privateHeaders = { 'Cache-Control': 'no-store' }
+const appDocumentRoutes = new Set(['/', '/services', '/connections', '/history'])
+function isAppDocumentPath(path: string) { return appDocumentRoutes.has(path.replace(/\/+$/, '') || '/') }
 function deny(status = 401) { return new Response('Authentication required', { status, headers: privateHeaders }) }
 function redirect(path: string, cookie?: string) { const headers = new Headers({ ...privateHeaders, Location: path }); if (cookie) headers.set('Set-Cookie', cookie); return new Response(null, { status: 303, headers }) }
 function cookie(token: string, age = SESSION_MAX_AGE) { return `${SESSION_COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}` }
@@ -65,7 +67,7 @@ export async function authGate(request: Request, env: AuthBindings): Promise<Res
     }
     const identity = await verifySession(sessionToken(request), config)
     if (!identity) {
-      if (request.method === 'GET' && path === '/') return redirect('/login')
+      if (request.method === 'GET' && isAppDocumentPath(path) && request.headers.get('Accept')?.includes('text/html')) return redirect('/login')
       return deny()
     }
     if (request.method === 'POST' && path === '/auth/logout') return redirect('/login', cookie('', 0))

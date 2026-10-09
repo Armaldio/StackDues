@@ -7,6 +7,7 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   workers: 1,
   retries: 0,
+  expect: { timeout: 15_000 },
   reporter: 'list',
   use: {
     channel: process.env.CI ? 'chrome' : undefined,

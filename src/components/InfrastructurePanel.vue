@@ -6,16 +6,16 @@ import { currentCostSnapshots, emptyCostFeed, parseCostFeed, isProviderStale, ty
 
 import { ConnectionApiError, refreshProviders } from '../lib/connection-api'
 
-const props = defineProps<{ fixedTotals: CurrencyTotal[]; configuredProviders: CostProvider[]; today: string }>()
+const props = defineProps<{ fixedTotals: CurrencyTotal[]; configuredProviders: CostProvider[]; today: string; initialFeed: CostFeed; hasInitialFeed: boolean }>()
 const emit = defineEmits<{ loaded: [feed: CostFeed]; details: [provider: CostProvider] }>()
-const feed = ref(emptyCostFeed())
+const feed = ref(props.initialFeed)
 const loading = ref(false)
 const error = ref('')
 const refreshing = ref(false)
 const refreshError = ref('')
 const expired = ref(false)
 const providers: CostProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean']
-let feedLoaded = false
+let feedLoaded = props.hasInitialFeed
 let staleRefreshStarted = false
 const activeSnapshots = computed(() => currentCostSnapshots(feed.value))
 const totals = computed(() => usageTotals(activeSnapshots.value, props.today, forecastProviders.value))
@@ -94,7 +94,7 @@ async function refreshStaleProviders() {
 }
 defineExpose({ reload })
 let timer: ReturnType<typeof setInterval> | undefined
-onMounted(async () => { await reload(); void refreshStaleProviders(); timer = setInterval(() => { if (!refreshing.value) void reload() }, 15 * 60 * 1000) })
+onMounted(async () => { if (!feedLoaded) await reload(); else emit('loaded', feed.value); void refreshStaleProviders(); timer = setInterval(() => { if (!refreshing.value) void reload() }, 15 * 60 * 1000) })
 onUnmounted(() => { if (timer !== undefined) clearInterval(timer) })
 watch(() => props.configuredProviders.join(','), () => { void refreshStaleProviders() })
 </script>
@@ -137,7 +137,7 @@ watch(() => props.configuredProviders.join(','), () => { void refreshStaleProvid
         <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>
-    <p class="provider-setup">Manage private credentials in <a href="#connections">Connections</a>. Provider refresh failures keep previous observations and history.</p>
+    <p class="provider-setup">Manage private credentials in <a href="/connections">Connections</a>. Provider refresh failures keep previous observations and history.</p>
   </section>
 </template>
 
