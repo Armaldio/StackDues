@@ -72,6 +72,11 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .provider-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: .75rem; }
 .provider-overview-card { min-width: 0; padding: 1rem 1.1rem; border: 1px solid var(--line); background: var(--surface); }
 .provider-overview-card h3 { margin: 0 0 .7rem; font-size: .95rem; }
+.service-detail-trigger { display: inline-grid; justify-items: start; gap: .15rem; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.service-detail-trigger:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .15em; }
+.service-detail-trigger:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 2px; }
+.provider-overview-card h3 .service-detail-trigger { width: 100%; }
+.connection-card header .service-detail-trigger,.provider-panel header .service-detail-trigger { font-weight: 600; }
 .provider-overview-card h3 .metric-note { display: block; font-weight: 400; }
 .provider-overview-card dl { margin: 0; }
 .provider-overview-card dl div { display: flex; justify-content: space-between; gap: .75rem; padding: .4rem 0; border-bottom: 1px solid var(--line); font-size: .75rem; }

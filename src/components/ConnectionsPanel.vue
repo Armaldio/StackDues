@@ -5,7 +5,7 @@ import { syncHostinger } from '../lib/hostinger-api'
 import type { CostFeed } from '../lib/cost-feed'
 import type { HostingerDiscovery } from '../lib/hostinger-api'
 const props = defineProps<{ costFeed: CostFeed; hostingerSync?: HostingerDiscovery['sync'] }>()
-const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses] }>()
+const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses]; details: [provider: ConnectionProvider | 'github'] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger']
 const names = { aws: 'Amazon Web Services', cloudflare: 'Cloudflare', hostinger: 'Hostinger', openai: 'OpenAI API', digitalocean: 'DigitalOcean' }
 const coverage: Record<ConnectionProvider, string> = {
@@ -129,7 +129,7 @@ onUnmounted(() => providers.forEach(clear))
     <p v-if="!visibleProviders.length && !visiblePlannedProviders.length" class="catalog-empty" role="status">No providers match your search.</p>
     <div v-if="visibleProviders.length" class="connection-grid">
       <article v-for="provider in visibleProviders" :key="provider" class="connection-card">
-        <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ connectionLabel(provider) }}</span></header>
+        <header><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ names[provider] }}</button></h3><span class="status-pill">{{ connectionLabel(provider) }}</span></header>
         <p><strong>Data available:</strong> {{ coverage[provider] }}</p>
         <p><strong>Setup and access:</strong> {{ permissions[provider] }}. {{ provider === 'hostinger' ? 'Review discovered renewals in Hostinger subscriptions below.' : '' }} <a v-if="provider === 'digitalocean'" href="https://docs.digitalocean.com/platform/billing/reference/api/" target="_blank" rel="noreferrer">DigitalOcean billing API documentation</a></p>
         <details class="connection-editor"><summary>{{ statuses?.[provider].configured ? 'Replace credentials' : 'Connect account' }}</summary>
@@ -155,7 +155,7 @@ onUnmounted(() => providers.forEach(clear))
     </div>
     <div v-if="visiblePlannedProviders.length" class="connection-grid planned-grid" aria-label="Coming soon providers">
       <article v-for="provider in visiblePlannedProviders" :key="provider.name" class="connection-card coming-soon-card">
-        <header><h3>{{ provider.name }}</h3><span class="status-pill planned-pill">Coming soon</span></header>
+        <header><h3><button class="service-detail-trigger" type="button" @click="emit('details', 'github')">{{ provider.name }}</button></h3><span class="status-pill planned-pill">Coming soon</span></header>
         <p><strong>Planned data:</strong> {{ provider.coverage }}</p>
         <p><strong>Setup prerequisite:</strong> {{ provider.setup }}</p>
         <p class="metric-note">This provider is not connected and has no active credential or sync controls.</p>
