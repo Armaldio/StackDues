@@ -13,6 +13,7 @@ async function retryProbe(name, url, isExpected, fetchImpl, attempts, delayMs) {
         cache: 'no-store',
         credentials: 'omit',
         redirect: 'manual',
+        headers: { Accept: url.pathname.startsWith('/api/') ? 'application/json' : 'text/html' },
         signal: AbortSignal.timeout(10_000),
       })
       if (isExpected(response)) return

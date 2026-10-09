@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import type { StoredSubscription } from '../lib/subscription-api'
 import { addHostingerSubscription, HostingerApiError, linkHostingerSubscription, readHostingerDiscovery, setHostingerSubscriptionExcluded, syncHostinger, type HostingerDiscovery as Discovery } from '../lib/hostinger-api'
 
-const props = defineProps<{ ledger: StoredSubscription[]; configured: boolean; initial?: Discovery }>()
+const props = defineProps<{ ledger: StoredSubscription[]; initial?: Discovery }>()
 const emit = defineEmits<{ changed: []; loaded: [value: Discovery] }>()
 const state = ref<Discovery | undefined>(props.initial)
 const loading = ref(false)
@@ -13,6 +13,7 @@ const notice = ref('')
 const expired = ref(false)
 const selected = ref<Record<string, string>>({})
 const modes = ref<Record<string, 'keep-current' | 'use-provider'>>({})
+let readVersion = 0
 const availableLedger = computed(() => props.ledger.filter(item => !state.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id)))
 const number = (amount: number | null, currency: string) => amount === null ? 'Price unavailable' : new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount)
 const period = (item: Discovery['subscriptions'][number]) => item.recurrenceInterval && item.recurrenceUnit && item.recurrenceUnit !== 'unsupported' ? `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` : 'Billing period not supported'
@@ -26,17 +27,16 @@ function unavailableReason(item: Discovery['subscriptions'][number]) {
 async function load() {
   if (loading.value || busyId.value) return
   loading.value = true
+  const version = ++readVersion
   try {
-    let next = state.value ?? await readHostingerDiscovery()
-    const lastAttempt = next.sync.lastAttemptAt ?? next.sync.lastSyncedAt
-    const elapsed = lastAttempt ? Date.now() - Date.parse(lastAttempt) : Infinity
-    if (props.configured && elapsed >= 6 * 60 * 60 * 1000) { next = await syncHostinger(); emit('changed') }
-    setState(next); error.value = ''; expired.value = false
+    const next = await readHostingerDiscovery()
+    if (version === readVersion) { setState(next); error.value = ''; expired.value = false }
   }
-  catch (cause) { fail(cause) }
+  catch (cause) { if (version === readVersion) fail(cause) }
   finally { loading.value = false }
 }
 function setState(next: Discovery) {
+  readVersion++
   state.value = next
   emit('loaded', next)
   for (const item of next.subscriptions) modes.value[item.externalId] ??= 'keep-current'
@@ -74,25 +74,18 @@ async function link(item: Discovery['subscriptions'][number]) {
   } catch (cause) { fail(cause) }
   finally { busyId.value = '' }
 }
-onMounted(() => {
-  if (!state.value) void load()
-  else {
-    emit('loaded', state.value)
-    const lastAttempt = state.value.sync.lastAttemptAt ?? state.value.sync.lastSyncedAt
-    if (props.configured && (!lastAttempt || Date.now() - Date.parse(lastAttempt) >= 6 * 60 * 60 * 1000)) void load()
-  }
-})
+onMounted(() => { if (!state.value) void load(); else emit('loaded', state.value) })
 defineExpose({ reload: load })
-watch(() => props.configured, configured => { if (configured) void load() })
+watch(() => props.initial, next => { if (next) setState(next) })
 </script>
 
 <template>
   <section id="hostinger-discovery" class="hostinger-discovery" aria-labelledby="hostinger-discovery-heading">
-    <div class="section-header"><div><p class="eyebrow">Fixed renewal discovery</p><h2 id="hostinger-discovery-heading">Hostinger subscriptions</h2></div><button class="secondary-button" type="button" :disabled="loading || !!busyId" @click="refresh">{{ loading ? 'Refreshing…' : 'Sync Hostinger subscriptions' }}</button></div>
+    <div class="section-header"><div><p class="eyebrow">Fixed renewal discovery</p><h2 id="hostinger-discovery-heading">Hostinger subscriptions</h2></div></div>
     <p class="section-description">Eligible renewals are added automatically. Possible manual matches need your review; existing values are preserved when linked.</p>
-    <p v-if="error" class="error-message" role="alert">{{ error }} <a v-if="expired" href="/login">Sign in</a></p>
+    <p v-if="error" class="error-message" role="alert">{{ error }} <a v-if="expired" href="/login">Sign in</a><button v-else class="text-button" type="button" :disabled="loading" @click="load">Try again</button></p>
     <p v-if="notice" class="connection-notice" role="status">{{ notice }}</p>
-    <p v-if="state?.sync.status === 'error'" class="error-message" role="status">Last Hostinger refresh failed. Previously discovered services and linked subscriptions are retained.</p>
+    <p v-if="state?.sync.status === 'error'" class="error-message" role="status">Last Hostinger refresh failed. Previously discovered services and linked subscriptions are retained. <button class="text-button" type="button" :disabled="loading || !!busyId" @click="refresh">{{ loading ? 'Retrying…' : 'Retry sync' }}</button></p>
     <p v-else-if="state?.sync.status === 'not-configured'" class="metric-note">Save a Hostinger API token in Connections before syncing services.</p>
     <div v-if="state?.subscriptions.length" class="hostinger-service-list">
       <article v-for="item in state.subscriptions" :key="item.externalId" class="hostinger-service-card">
