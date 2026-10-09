@@ -1,10 +1,33 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ConnectionApiError, deleteConnection, fetchConnections, refreshProviders, saveConnection, type ConnectionProvider, type ConnectionStatuses, type ProviderCredentials } from '../lib/connection-api'
 import { syncHostinger } from '../lib/hostinger-api'
+import type { CostFeed } from '../lib/cost-feed'
+import type { HostingerDiscovery } from '../lib/hostinger-api'
+const props = defineProps<{ costFeed: CostFeed; hostingerSync?: HostingerDiscovery['sync'] }>()
 const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'hostinger']
 const names = { aws: 'Amazon Web Services', cloudflare: 'Cloudflare', hostinger: 'Hostinger' }
+const coverage: Record<ConnectionProvider, string> = {
+  aws: 'Actual usage, comparable period and full-month forecast when available; invoices are not imported',
+  cloudflare: 'Billing-period actuals and service breakdown; no full-month forecast or invoice import',
+  hostinger: 'Fixed renewal price, recurrence, auto-renewal and next billing date; invoices are not imported',
+}
+const permissions: Record<ConnectionProvider, string> = {
+  aws: 'Cost Explorer read-only access',
+  cloudflare: 'Account billing read access',
+  hostinger: 'Read-only access to the subscription list',
+}
+const plannedProviders = [
+  { name: 'GitHub', coverage: 'Personal billing usage; currency and payer details are not exposed by the current API, so money totals are not available yet', setup: 'Enhanced billing access may be required' },
+  { name: 'OpenAI API', coverage: 'Daily organization API cost aggregates; does not include ChatGPT Plus or finalized invoices', setup: 'Organization Admin API key required' },
+  { name: 'DigitalOcean', coverage: 'Daily billing insights in USD; provider notes these may omit final month-end charges', setup: 'Read-only billing:read token required' },
+]
+const search = ref('')
+const availability = ref<'all' | 'available' | 'coming-soon'>('all')
+function matches(text: string) { return text.toLowerCase().includes(search.value.trim().toLowerCase()) }
+const visibleProviders = computed(() => availability.value === 'coming-soon' ? [] : providers.filter(provider => matches(`${names[provider]} ${coverage[provider]} ${permissions[provider]}`)))
+const visiblePlannedProviders = computed(() => availability.value === 'available' ? [] : plannedProviders.filter(provider => matches(`${provider.name} ${provider.coverage} ${provider.setup}`)))
 const statuses = ref<ConnectionStatuses>()
 const loading = ref(false)
 const busy = ref<ConnectionProvider>()
@@ -20,6 +43,17 @@ function clear(provider: ConnectionProvider) {
   else drafts.hostinger.apiToken = ''
 }
 function fail(cause: unknown) { error.value = cause instanceof Error ? cause.message : 'The request failed. Reload connections before trying again.'; expired.value = cause instanceof ConnectionApiError && cause.status === 401 }
+function lastRefresh(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostingerSync?.lastSyncedAt : props.costFeed.providers[provider].lastSyncedAt }
+function lastAttempt(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostingerSync?.lastAttemptAt : props.costFeed.providers[provider].lastAttemptAt }
+function refreshStatus(provider: ConnectionProvider) { return provider === 'hostinger' ? props.hostingerSync?.status : props.costFeed.providers[provider].status }
+function formatTime(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
+function connectionLabel(provider: ConnectionProvider) {
+  if (busy.value === provider && syncState[provider] === 'idle') return 'Connecting…'
+  if (syncState[provider] === 'syncing') return 'Syncing…'
+  if (syncState[provider] === 'failed' || refreshStatus(provider) === 'error') return 'Sync failed'
+  if (syncState[provider] === 'synced' || refreshStatus(provider) === 'synced') return 'Synced'
+  return statuses.value ? statuses.value[provider].configured ? 'Credentials saved' : 'Not connected' : loading.value ? 'Loading…' : 'Unavailable'
+}
 async function reload() {
   if (loading.value || busy.value) return
   loading.value = true
@@ -83,10 +117,17 @@ onUnmounted(() => providers.forEach(clear))
     <div class="section-header"><div><p class="eyebrow">Private provider access</p><h2 id="connections-heading">Connections</h2></div><button type="button" class="secondary-button" :disabled="loading || !!busy" @click="reload">{{ loading ? 'Loading…' : 'Reload connections' }}</button></div>
     <p class="section-description">Credentials are encrypted on the server. Saved secrets are never returned to this dashboard. Replacing credentials replaces the entire connection; previous cost history is kept.</p>
     <p v-if="error" class="error-message" role="alert">{{ error }} <a v-if="expired" href="/login">Sign in</a></p><p v-if="notice" class="connection-notice" role="status">{{ notice }}</p>
-    <div class="connection-grid">
-      <article v-for="provider in providers" :key="provider" class="connection-card">
-        <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ busy === provider && syncState[provider] === 'idle' ? 'Connecting…' : syncState[provider] === 'syncing' ? 'Syncing…' : syncState[provider] === 'failed' ? 'Sync failed' : syncState[provider] === 'synced' ? 'Synced' : statuses ? statuses[provider].configured ? 'Credentials saved' : 'Not configured' : loading ? 'Loading…' : 'Unavailable' }}</span></header>
-        <p v-if="provider === 'aws'">Use an AWS key with read-only Cost Explorer access.</p><p v-else-if="provider === 'cloudflare'">Use a Cloudflare token with account billing read access.</p><p v-else>Hostinger API tokens inherit your account permissions; StackDues only reads the subscription list. Review discovered renewals in Hostinger subscriptions below.</p>
+    <div class="catalog-tools">
+      <label for="provider-search">Search providers<input id="provider-search" v-model="search" type="search" placeholder="Name, data or permission" autocomplete="off" /></label>
+      <label for="provider-availability">Provider availability<select id="provider-availability" v-model="availability"><option value="all">All providers</option><option value="available">Available now</option><option value="coming-soon">Coming soon</option></select></label>
+      <button class="text-button" type="button" :disabled="!search && availability === 'all'" @click="search = ''; availability = 'all'">Clear filters</button>
+    </div>
+    <p v-if="!visibleProviders.length && !visiblePlannedProviders.length" class="catalog-empty" role="status">No providers match your search.</p>
+    <div v-if="visibleProviders.length" class="connection-grid">
+      <article v-for="provider in visibleProviders" :key="provider" class="connection-card">
+        <header><h3>{{ names[provider] }}</h3><span class="status-pill">{{ connectionLabel(provider) }}</span></header>
+        <p><strong>Data available:</strong> {{ coverage[provider] }}</p>
+        <p><strong>Setup and access:</strong> {{ permissions[provider] }}. {{ provider === 'hostinger' ? 'Review discovered renewals in Hostinger subscriptions below.' : '' }}</p>
         <details class="connection-editor"><summary>{{ statuses?.[provider].configured ? 'Replace credentials' : 'Connect account' }}</summary>
           <form autocomplete="off" @submit.prevent="save(provider)"><fieldset :disabled="loading || !!busy || !statuses || !!error">
             <template v-if="provider === 'aws'"><label :for="`${provider}-key`">Access key ID<input :id="`${provider}-key`" v-model="drafts.aws.accessKeyId" type="password" autocomplete="off" required maxlength="256" /></label><label :for="`${provider}-secret`">Secret access key<input :id="`${provider}-secret`" v-model="drafts.aws.secretAccessKey" type="password" autocomplete="off" required maxlength="4096" /></label><label :for="`${provider}-session`">Session token (optional)<input :id="`${provider}-session`" v-model="drafts.aws.sessionToken" type="password" autocomplete="off" maxlength="4096" /></label></template>
@@ -100,7 +141,18 @@ onUnmounted(() => providers.forEach(clear))
         <button v-if="syncState[provider] === 'failed'" class="secondary-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Retrying…' : `Retry ${names[provider]} sync` }}</button>
         <p v-if="syncState[provider] === 'synced'" class="connection-next-step">{{ provider === 'hostinger' ? 'Next: review eligible fixed renewals in Hostinger subscriptions below.' : 'Next: review current charges in Overview and Infrastructure.' }}</p>
         <p v-else-if="statuses?.[provider].configured" class="connection-next-step">Next: review saved {{ provider === 'hostinger' ? 'renewals' : 'billing data' }} in Overview.</p>
-        <p v-if="statuses?.[provider].updatedAt" class="metric-note">Updated {{ new Date(statuses[provider].updatedAt!).toLocaleString() }}</p>
+        <p v-if="lastRefresh(provider)" class="metric-note">Last billing sync · {{ formatTime(lastRefresh(provider)!) }}</p>
+        <p v-if="!lastRefresh(provider) && refreshStatus(provider) === 'error'" class="metric-note">Last sync failed; previous data is retained.</p>
+        <p v-if="lastAttempt(provider) && refreshStatus(provider) === 'error'" class="metric-note">Last sync attempt · {{ formatTime(lastAttempt(provider)!) }}</p>
+        <p v-if="!lastRefresh(provider) && refreshStatus(provider) !== 'error' && statuses?.[provider].updatedAt" class="metric-note">Credentials saved · {{ formatTime(statuses[provider].updatedAt!) }}. No successful billing sync yet.</p>
+      </article>
+    </div>
+    <div v-if="visiblePlannedProviders.length" class="connection-grid planned-grid" aria-label="Coming soon providers">
+      <article v-for="provider in visiblePlannedProviders" :key="provider.name" class="connection-card coming-soon-card">
+        <header><h3>{{ provider.name }}</h3><span class="status-pill planned-pill">Coming soon</span></header>
+        <p><strong>Planned data:</strong> {{ provider.coverage }}</p>
+        <p><strong>Setup prerequisite:</strong> {{ provider.setup }}</p>
+        <p class="metric-note">This provider is not connected and has no active credential or sync controls.</p>
       </article>
     </div>
   </section>
