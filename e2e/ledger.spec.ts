@@ -50,6 +50,11 @@ async function add(page: Page, name: string, amount: string, interval: string, u
   await expect(form).not.toBeVisible()
 }
 
+async function revealProviderDetails(page: Page) {
+  const disclosure = page.locator('.provider-observations')
+  if (await disclosure.getAttribute('open') === null) await disclosure.locator('summary').click()
+}
+
 const routedScreens = [
   { path: '/', title: 'Overview', nav: 'Overview' },
   { path: '/services', title: 'Services', nav: 'Services' },
@@ -77,6 +82,8 @@ test('first run prioritizes provider connections and preserves a keyboard-friend
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg')
   await expect(page.getByRole('link', { name: 'StackDues' })).toBeVisible()
   await expect(page.locator('.app-footer')).toContainText('StackDues')
+  await expect(page.locator('.overview-snapshot')).toContainText('No billing connections yet')
+  await expect(page.locator('.overview-empty')).toContainText('No spending data has arrived yet')
   const connect = page.getByRole('link', { name: 'Connect a provider' })
   const addManually = page.getByRole('button', { name: 'Add manually', exact: true }).first()
   await expect(connect).toBeVisible()
@@ -115,6 +122,87 @@ test('first run prioritizes provider connections and preserves a keyboard-friend
   await expect(page.getByRole('dialog').getByLabel('Name', { exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('Overview shows per-currency known spend, forecast completeness and the next real renewals', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const periodStart = `${today.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 1)).toISOString().slice(0, 10)
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const nextDate = (days: number) => { const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+  await mockLedger(page, [
+    { id: 'usd-plan', name: 'USD Plan', billingType: 'fixed', amount: 15, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(2), status: 'active', revision: 1 },
+    { id: 'eur-plan', name: 'EUR Plan', billingType: 'fixed', amount: 10, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(7), status: 'active', revision: 1 },
+    { id: 'soonest', name: 'Soonest', billingType: 'fixed', amount: 5, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(1), status: 'active', revision: 1 },
+    { id: 'later', name: 'Later', billingType: 'fixed', amount: 8, currency: 'GBP', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(30), status: 'active', revision: 1 },
+  ])
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [
+    { id: 'aws-actual', provider: 'aws', periodStart, periodEnd, amount: 4.5, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+    { id: 'aws-forecast', provider: 'aws', periodStart, periodEnd, amount: 100, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
+    { id: 'cf-actual', provider: 'cloudflare', periodStart, periodEnd, amount: 7, currency: 'EUR', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+  ], providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'synced', lastSyncedAt: capturedAt } } } }))
+  await page.goto('/')
+  const overview = page.locator('.overview-snapshot')
+  const usd = overview.locator('.overview-currency-card').filter({ hasText: 'USD' })
+  const eur = overview.locator('.overview-currency-card').filter({ hasText: 'EUR' })
+  await expect(usd).toContainText('USD 20.00')
+  await expect(usd).toContainText('USD 4.50')
+  await expect(eur).toContainText('EUR 10.00')
+  await expect(eur).toContainText('EUR 7.00')
+  await expect(eur).toContainText('Unavailable')
+  await expect(eur).toContainText('complete forecast is unavailable')
+  await expect(usd).toContainText(`Reported periods · AWS · ${periodStart}–${periodEnd}`)
+  await expect(eur).toContainText(`Reported periods · Cloudflare · ${periodStart}–${periodEnd}`)
+  await expect(overview.locator('.overview-currency-card').first()).not.toContainText('USD 24.50')
+  const charges = page.locator('.overview-renewal-list li')
+  await expect(charges).toHaveCount(3)
+  await expect(charges.nth(0)).toContainText('Soonest')
+  await expect(charges.nth(0)).toContainText('USD 5.00')
+  await expect(charges.nth(0)).toContainText(new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${nextDate(1)}T00:00:00Z`)))
+  await expect(charges.nth(1)).toContainText('USD Plan')
+  await expect(charges.nth(1)).toContainText('USD 15.00')
+  await expect(charges.nth(2)).toContainText('EUR Plan')
+  await expect(charges.nth(2)).not.toContainText('Later')
+  await expect(page.locator('.provider-observations')).not.toHaveAttribute('open', '')
+  await expect(page.locator('.provider-overview-card').first()).toBeHidden()
+  await expect(overview).toContainText('Updated')
+  await page.setViewportSize({ width: 320, height: 850 })
+  await expect(usd).toBeVisible()
+  await expect(charges.first()).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('Overview keeps known spending visible during provider errors and stale data', async ({ page }) => {
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const periodStart = `${today.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().slice(0, 10)
+  const capturedAt = new Date(now.getTime() - 3 * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  let status: 'error' | 'synced' = 'error'
+  await mockLedger(page, [{ id: 'fixed-known', name: 'Known fixed', billingType: 'fixed', amount: 25, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: today, status: 'active', revision: 1 }], false)
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: true, revision: 1 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [{ id: 'last-known-actual', provider: 'aws', periodStart, periodEnd, amount: 4, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } }], providers: { aws: { status, lastAttemptAt: new Date().toISOString(), lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' } } } }))
+  await page.goto('/')
+  const summary = page.locator('.overview-snapshot')
+  await expect(summary).toContainText('AWS sync failed')
+  await expect(summary.locator('.overview-currency-card')).toContainText('USD 25.00')
+  await expect(summary.locator('.overview-currency-card')).toContainText('USD 4.00')
+  await expect(summary.locator('.overview-currency-card')).toContainText('Unavailable')
+  status = 'synced'
+  await page.goto('/')
+  await expect(summary).toContainText('AWS data is stale')
+  await expect(summary.locator('.overview-currency-card')).toContainText('USD 4.00')
+})
+
+test('Overview treats a configured provider without observations as pending instead of zero', async ({ page }) => {
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  await mockLedger(page, [], false)
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: true, revision: 1 }, hostinger: { configured: false, revision: 0 } } }))
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'synced', lastSyncedAt: capturedAt } } } }))
+  await page.goto('/')
+  await expect(page.locator('.overview-snapshot')).toContainText('Checked')
+  await expect(page.locator('.overview-empty')).toContainText('No spending data has arrived yet')
+  await expect(page.locator('.overview-snapshot')).not.toContainText('USD 0.00')
 })
 
 test('path routes load and reload distinct screens and support browser back/forward', async ({ page }) => {
@@ -226,11 +314,13 @@ test('connection sync failure offers retry and then reports the latest successfu
   await expect(aws.getByText('Synced', { exact: true })).toBeVisible()
   await expect(aws).toContainText('Last billing sync')
   await page.goto('/')
+  await revealProviderDetails(page)
   await expect(page.locator('.provider-overview-card').filter({ hasText: 'Metered usage' }).first()).toContainText('USD 7.00')
   expect(attempts).toBe(2)
 })
 
 test('fresh subscriptions support real recurrence, edits, status changes, deletion, and reload persistence', async ({ page }) => {
+  test.setTimeout(60_000)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
@@ -241,25 +331,30 @@ test('fresh subscriptions support real recurrence, edits, status changes, deleti
   await add(page, 'Hostinger', '192', '4', 'year')
   await add(page, 'VPS', '12', '1', 'month')
   await page.goto('/')
-  await expect(page.locator('.monthly-value')).toHaveText('USD 16.83/ mo')
-  await expect(page.locator('.metric').first()).toContainText('USD 202.00')
+  await expect(page.locator('.overview-primary-value')).toHaveText('USD 16.83')
+  await expect(page.locator('.overview-value-label')).toHaveText('Known fixed monthly commitments')
+  await expect(page.locator('.overview-renewal-list')).toContainText('Hostinger')
   await page.goto('/services')
   await page.reload()
   await expect(page.getByRole('row').filter({ hasText: 'Hostinger' })).toContainText('Every 4 years')
   await page.getByRole('button', { name: 'Pause VPS in subscriptions', exact: true }).click()
   await page.goto('/')
-  await expect(page.locator('.monthly-value')).toHaveText('USD 4.83/ mo')
+  await expect(page.locator('.overview-primary-value')).toHaveText('USD 4.83')
   await page.goto('/services')
   await page.getByRole('button', { name: 'Resume VPS in subscriptions', exact: true }).click()
   await page.getByRole('button', { name: 'Edit VPS', exact: true }).click()
   await page.getByRole('dialog').getByLabel('Amount per charge').fill('24')
+  const changedRenewalDate = new Date(); changedRenewalDate.setUTCDate(changedRenewalDate.getUTCDate() + 40)
+  const changedRenewal = changedRenewalDate.toISOString().slice(0, 10)
+  await page.getByRole('dialog').getByLabel('Next renewal date').fill(changedRenewal)
   await page.getByRole('dialog').getByRole('button', { name: 'Save subscription' }).click()
   await page.goto('/')
-  await expect(page.locator('.monthly-value')).toHaveText('USD 28.83/ mo')
+  await expect(page.locator('.overview-primary-value')).toHaveText('USD 28.83')
+  await expect(page.locator('.overview-renewal-list li').filter({ hasText: 'VPS' })).toContainText(new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${changedRenewal}T00:00:00Z`)))
   await page.goto('/services')
   await add(page, 'Euro domain', '12', '1', 'year', 'EUR')
   await page.goto('/')
-  await expect(page.locator('.monthly-value')).toHaveText(['EUR 1.00/ mo', 'USD 28.83/ mo'])
+  await expect(page.locator('.overview-primary-value')).toHaveText(['EUR 1.00', 'USD 28.83'])
   await page.goto('/services')
   page.on('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Delete Euro domain', exact: true }).click()
@@ -488,13 +583,14 @@ test('connecting Cloudflare shows actual spend prominently when no forecast is a
   await expect(card).toContainText('Next: review current charges in Overview and Infrastructure.')
   await page.goto('/')
   await expect(page.getByRole('link', { name: 'Manage connections' })).toBeVisible()
+  await revealProviderDetails(page)
   const providerOverview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Cloudflare/ }) })
   await expect(providerOverview).toContainText('USD 8.00')
   await expect(providerOverview).toContainText('Forecast unavailable')
   const overview = page.locator('.tracked-spending-card')
   await expect(overview).toContainText('USD 40.00')
   await expect(overview).toContainText('USD 8.00')
-  await expect(overview).toContainText('Combined estimate unavailable')
+  await expect(overview).toContainText('complete forecast is unavailable')
   await page.goto('./services')
   await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$8.00')
   await page.goto('./history')
@@ -539,6 +635,7 @@ test('OpenAI organization costs connect with explicit admin scope and update Ove
   await expect(card.getByText('Synced', { exact: true })).toBeVisible()
   await expect(card.getByLabel('Organization Admin API key')).toHaveValue('')
   await page.goto('./')
+  await revealProviderDetails(page)
   const overview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /OpenAI API/ }) })
   await expect(overview).toContainText('USD 4.75')
   await expect(overview).toContainText('Forecast unavailable')
@@ -588,6 +685,7 @@ test('DigitalOcean imports finalized invoices on connect without counting previe
   await card.getByRole('button', { name: 'Save DigitalOcean connection' }).click()
   await expect(card.getByText('Synced', { exact: true })).toBeVisible()
   await page.goto('./')
+  await revealProviderDetails(page)
   const overview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /DigitalOcean/ }) })
   await expect(overview).toContainText('USD 18.40')
   await expect(overview).toContainText('Finalized invoice totals')
@@ -615,6 +713,7 @@ test('provider details reuse saved actual and forecast observations without comb
   ], providers: { aws: { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt }, cloudflare: { status: 'not-configured' }, openai: { status: 'not-configured' }, digitalocean: { status: 'not-configured' } } } }))
   await page.setViewportSize({ width: 320, height: 760 })
   await page.goto('./')
+  await revealProviderDetails(page)
   const card = page.locator('.provider-overview-card').filter({ hasText: 'Metered usage' }).first()
   const trigger = card.getByRole('button', { name: /AWS Metered usage/ })
   await trigger.click()
@@ -796,24 +895,34 @@ test('overview shows comparable provider trends, cost drivers, billing periods a
   await page.setViewportSize({ width: 320, height: 900 })
   await page.goto('./')
   await expect(page.getByRole('heading', { name: 'Overview.' })).toBeVisible()
-  const insights = page.getByRole('region', { name: 'Cost drivers & trend' })
+  const insights = page.getByRole('region', { name: 'Cost driver & trend' })
   await expect(insights).toContainText('AWS')
   await expect(insights).toContainText('+20.0%')
   await expect(insights).toContainText('EC2')
   await expect(insights).toContainText('USD 18.00')
+  await revealProviderDetails(page)
   await expect(page.locator('.provider-overview-card').filter({ hasText: 'Metered usage' }).first()).toContainText(`${date(currentStart)}–${date(currentEnd)}`)
   await expect(page.locator('.provider-overview-card').filter({ hasText: 'Metered usage' }).first()).toContainText('Last successful sync')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
 test('connecting Hostinger automatically discovers subscriptions without pressing Sync', async ({ page }) => {
-  const ledger = await mockLedger(page)
+  test.setTimeout(60_000)
+  const manualRenewal = new Date(); manualRenewal.setUTCDate(manualRenewal.getUTCDate() + 5)
+  const secondManualRenewal = new Date(); secondManualRenewal.setUTCDate(secondManualRenewal.getUTCDate() + 6)
+  const ledger = await mockLedger(page, [
+    { id: 'manual-renewal', name: 'Manual domain', billingType: 'fixed', amount: 12, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: manualRenewal.toISOString().slice(0, 10), status: 'active', revision: 1 },
+    { id: 'manual-euro', name: 'EUR service', billingType: 'fixed', amount: 36, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: secondManualRenewal.toISOString().slice(0, 10), status: 'active', revision: 1 },
+  ])
   let configured = false, syncCalls = 0
   const renewal = new Date(); renewal.setUTCDate(renewal.getUTCDate() + 10)
   const renewalDate = renewal.toISOString().slice(0, 10)
   const row = { externalId: 'host-kvm', name: 'KVM from Hostinger', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: `${renewalDate}T00:00:00.000Z`, linkedSubscriptionId: 'auto-host-kvm', automaticallyLinked: true, excluded: false, possibleMatches: [], seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
   const syncedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured, revision: configured ? 1 : 0 } } }))
+  const periodStart = `${syncedAt.slice(0, 7)}-01`
+  const periodEnd = new Date(Date.UTC(Number(syncedAt.slice(0, 4)), Number(syncedAt.slice(5, 7)), 1)).toISOString().slice(0, 10)
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: true, revision: 1 }, hostinger: { configured, revision: configured ? 1 : 0 } } }))
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [{ id: 'cloudflare-actual', provider: 'cloudflare', periodStart, periodEnd, amount: 8, currency: 'USD', kind: 'actual', capturedAt: syncedAt, metadata: { period: 'current' } }], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'synced', lastSyncedAt: syncedAt } } } }))
   await page.route('**/api/connections/hostinger', async route => { configured = true; return route.fulfill({ json: { configured: true, revision: 1 } }) })
   await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: configured && syncCalls ? [row] : [], sync: configured && syncCalls ? { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } : { status: 'not-configured' } } }))
   await page.route('**/api/hostinger/subscriptions/sync', async route => { syncCalls++; ledger.addSubscription({ id: 'auto-host-kvm', name: row.name, provider: 'Hostinger', billingType: 'fixed', amount: row.renewalPrice, currency: 'USD', recurrenceInterval: 12, recurrenceUnit: 'month', nextRenewalAt: renewalDate, status: 'active', revision: 1 }); return route.fulfill({ json: { subscriptions: [row], sync: { status: 'synced', lastAttemptAt: syncedAt, lastSyncedAt: syncedAt } } }) })
@@ -827,9 +936,16 @@ test('connecting Hostinger automatically discovers subscriptions without pressin
   await page.goto('./services')
   await expect(page.locator('#hostinger-discovery')).toContainText('KVM from Hostinger')
   await expect(page.locator('#subscriptions')).toContainText('KVM from Hostinger')
+  await page.goto('/')
+  await expect(page.locator('.overview-primary-value')).toHaveText(['EUR 3.00', 'USD 27.00'])
+  await expect(page.locator('.overview-currency-card').filter({ hasText: 'USD' })).toContainText('USD 8.00')
+  await expect(page.locator('.overview-currency-card').filter({ hasText: 'USD' })).toContainText('forecast is unavailable')
+  await expect(page.locator('.overview-renewal-list li').filter({ hasText: 'KVM from Hostinger' })).toHaveCount(1)
+  await expect(page.locator('.overview-renewal-list li')).toHaveCount(3)
   await page.goto('./history')
   await expect(page.locator('.renewal-list')).toContainText('KVM from Hostinger')
   await page.goto('./')
+  await revealProviderDetails(page)
   const hostingerOverview = page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Hostinger/ }) })
   await expect(hostingerOverview).toContainText('USD 15.00')
   await hostingerOverview.getByRole('button', { name: /Hostinger Fixed recurring commitments/ }).click()
@@ -851,8 +967,9 @@ test('stale Hostinger commitments remain visible but are omitted from upcoming c
   await page.goto('./services')
   await expect(page.locator('#hostinger-discovery')).toBeVisible()
   await page.goto('./')
+  await revealProviderDetails(page)
   await expect(page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Hostinger/ }) })).toContainText('USD 10.00')
-  await expect(page.locator('.provider-overview')).toContainText('omitted from upcoming-charge totals')
+  await expect(page.locator('.overview-next-charges')).toContainText('renewal dates need confirmation and are omitted here')
   await page.goto('./history')
   const renewalLane = page.locator('#timeline .timeline-lane').first()
   await expect(renewalLane).toContainText('No active renewal is scheduled in the next 30 days')
