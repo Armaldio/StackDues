@@ -40,8 +40,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -54,26 +52,30 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Verify production environment configuration
+        id: production-config
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
             echo "::error::Configure CLOUDFLARE_API_TOKEN as a secret in the production environment."
             exit 1
           fi
-          if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
-            echo "::error::Configure CLOUDFLARE_ACCOUNT_ID as a variable in the production environment."
-            exit 1
-          fi
           configured_account_id="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync("wrangler.jsonc", "utf8")).account_id)')"
-          if [[ "$CLOUDFLARE_ACCOUNT_ID" != "$configured_account_id" ]]; then
-            echo "::error::CLOUDFLARE_ACCOUNT_ID must match the account configured in wrangler.jsonc."
+          if [[ -z "$configured_account_id" ]]; then
+            echo "::error::wrangler.jsonc must contain the Cloudflare account_id."
             exit 1
           fi
+          if [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" && "$CLOUDFLARE_ACCOUNT_ID" != "$configured_account_id" ]]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID, if configured, must match wrangler.jsonc."
+            exit 1
+          fi
+          echo "account_id=$configured_account_id" >> "$GITHUB_OUTPUT"
       - name: Apply pending remote D1 migrations
         id: migrations
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.production-config.outputs.account_id }}
           GH_TOKEN: ${{ github.token }}
         run: |
           latest_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
@@ -121,6 +123,7 @@ jobs:
         if: steps.deploy-guard.outputs.current == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.production-config.outputs.account_id }}
         run: npm run deploy -- --message "StackDues production ${GITHUB_SHA}"
       - name: Verify anonymous authentication boundary
         id: auth-smoke
