@@ -126,7 +126,7 @@ export async function readCostFeed(db: D1Database): Promise<CostFeed> {
 
 /** Each provider's observations and status commit together. Errors never replace its last success. */
 export async function persistProviderSync(db: D1Database, provider: CostProvider, input: readonly CostSnapshot[], status: ProviderSyncStatus): Promise<void> {
-  if (!['aws', 'cloudflare'].includes(provider) || !isValidCostTimestamp(status.lastAttemptAt) || !['not-configured', 'synced', 'error'].includes(status.status)) throw new LedgerError(400, 'Invalid provider sync state.')
+  if (!['aws', 'cloudflare', 'openai'].includes(provider) || !isValidCostTimestamp(status.lastAttemptAt) || !['not-configured', 'synced', 'error'].includes(status.status)) throw new LedgerError(400, 'Invalid provider sync state.')
   const attemptedAt = new Date(status.lastAttemptAt).toISOString()
   if (status.status === 'synced' && (!isValidCostTimestamp(status.lastSyncedAt) || Date.parse(status.lastSyncedAt) !== Date.parse(attemptedAt))) throw new LedgerError(400, 'Invalid successful sync timestamp.')
   let snapshots: readonly CostSnapshot[]

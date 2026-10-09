@@ -31,7 +31,7 @@ test('credential encryption, guarded writes and failure handling run in real wor
       await call('load', { provider: 'aws' }, 503)
       await call('initialize')
       assert.equal(await call('load', { provider: 'aws' }), null)
-      assert.deepEqual(await call('list'), { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } })
+      assert.deepEqual(await call('list'), { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 } })
     })
     await t.test('only ciphertext reaches D1 while status responses never include secrets', async () => {
       const saved = await call('save', { provider: 'aws', credentials: aws, revision: 0, key })
@@ -44,6 +44,19 @@ test('credential encryption, guarded writes and failure handling run in real wor
       await call('save', { provider: 'aws', credentials: aws, revision: 1, key })
       const again = await call('inspect', { provider: 'aws' })
       assert.notEqual(again.iv, row.iv); assert.notEqual(again.ciphertext, row.ciphertext)
+      await call('sql', { sql: `INSERT INTO cost_observations (id, provider, period_start, period_end, amount, currency, kind, captured_at, metadata_json) VALUES ('aws:legacy', 'aws', '2026-10-01', '2026-11-01', 1, 'USD', 'actual', '2026-10-08T12:00:00.000Z', '{"period":"current"}'); INSERT INTO provider_sync_status (provider, status, last_attempt_at, last_synced_at) VALUES ('aws', 'synced', '2026-10-08T12:00:00.000Z', '2026-10-08T12:00:00.000Z');` })
+      await call('extend')
+      assert.deepEqual(await call('load', { provider: 'aws', key }), aws, 'schema migration preserves existing encrypted provider data')
+      const migratedFeed = await call('costs')
+      assert.equal(migratedFeed.snapshots[0]?.id, 'aws:legacy', 'schema migration preserves immutable provider history')
+      assert.equal(migratedFeed.providers.aws.status, 'synced')
+      const openai = { adminApiKey: 'TEST_OPENAI_ADMIN_KEY' }
+      await call('save', { provider: 'openai', credentials: openai, revision: 0, key })
+      assert.deepEqual(await call('load', { provider: 'openai', key }), openai)
+      assert.equal((await call('list')).openai.configured, true)
+      const openaiRow = await call('inspect', { provider: 'openai' })
+      assert.ok(!JSON.stringify(openaiRow).includes(openai.adminApiKey))
+      assert.ok(!JSON.stringify(await call('list')).includes(openai.adminApiKey))
     })
     await t.test('wrong, malformed and missing keys fail without destroying saved credentials', async () => {
       for (const invalid of [undefined, '', 'short', 'g'.repeat(64), 'b'.repeat(64)]) {

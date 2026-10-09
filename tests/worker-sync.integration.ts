@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CostFeed } from '../src/lib/cost-feed.ts'
+import { latestCostSnapshots } from '../src/domain/usage-costs.ts'
 
 test('Worker sync isolates providers and commits honest observations in real D1', { timeout: 90_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'stackdues-sync-'))
@@ -35,16 +36,18 @@ test('Worker sync isolates providers and commits honest observations in real D1'
     await call({ action: 'initialize' })
     await t.test('absent credentials skip all provider requests and record attempts without zero snapshots', async () => {
       const { feed, calls } = await call({ action: 'manual', mode: 'missing' })
-      assert.deepEqual(calls, { aws: 0, cloudflare: 0 })
+      assert.deepEqual(calls, { aws: 0, cloudflare: 0, openai: 0 })
       assert.deepEqual(feed.snapshots, [])
-      for (const provider of ['aws', 'cloudflare'] as const) assert.deepEqual(feed.providers[provider], { status: 'not-configured', lastAttemptAt: '2026-10-08T12:00:00.000Z' })
+      for (const provider of ['aws', 'cloudflare', 'openai'] as const) assert.deepEqual(feed.providers[provider], { status: 'not-configured', lastAttemptAt: '2026-10-08T12:00:00.000Z' })
     })
     await t.test('manual and scheduled attempts share normalization and stable retry IDs', async () => {
       const manual = await call({ action: 'manual', mode: 'success', now: '2026-10-08T13:00:00Z' })
-      assert.deepEqual(manual.calls, { aws: 4, cloudflare: 1 })
-      assert.equal(manual.feed.snapshots.length, 5)
+      assert.deepEqual(manual.calls, { aws: 4, cloudflare: 1, openai: 1 })
+      assert.equal(manual.feed.snapshots.length, 6)
       assert.equal(manual.feed.snapshots.find(item => item.kind === 'forecast')?.amount, 19)
       assert.equal(manual.feed.snapshots.find(item => item.provider === 'cloudflare')?.amount, 2)
+      assert.equal(manual.feed.snapshots.find(item => item.provider === 'openai')?.amount, 2.25)
+      assert.equal(manual.feed.snapshots.find(item => item.provider === 'openai')?.currency, 'USD')
       const scheduled = await call({ action: 'scheduled', mode: 'success', now: '2026-10-08T13:00:00Z' })
       assert.deepEqual(scheduled.feed, manual.feed)
     })
@@ -57,6 +60,15 @@ test('Worker sync isolates providers and commits honest observations in real D1'
         assert.equal(feed.providers.cloudflare.status, 'synced')
         assert.equal(calls.aws, mode === 'credential-error' ? 0 : 1)
       }
+    })
+    await t.test('OpenAI authorization failure preserves its last good costs and does not expose the Admin key', async () => {
+      const failed = await call({ action: 'manual', mode: 'openai-error', providers: ['openai'], now: '2026-10-08T15:30:00Z' })
+      assert.deepEqual(failed.calls, { aws: 0, cloudflare: 0, openai: 1 })
+      assert.equal(failed.feed.providers.openai.status, 'error')
+      assert.equal(failed.feed.providers.openai.lastSyncedAt, '2026-10-08T15:00:00.000Z')
+      assert.equal(failed.feed.snapshots.filter(item => item.provider === 'openai').length, 3)
+      assert.equal(latestCostSnapshots(failed.feed.snapshots).filter(item => item.provider === 'openai').length, 1, 'repeated cumulative reports remain revisions, not added charges')
+      assert.ok(!JSON.stringify(failed).includes('TEST_OPENAI_ADMIN_KEY'))
     })
     await t.test('timeout and malformed money are failures rather than fresh zero totals', async () => {
       const timedOut = await call({ action: 'scheduled', mode: 'timeout', now: '2026-10-08T16:00:00Z' })
@@ -85,7 +97,7 @@ test('Worker sync isolates providers and commits honest observations in real D1'
     })
     await t.test('a provider-specific refresh contacts only the newly connected provider', async () => {
       const { feed, calls } = await call({ action: 'manual', mode: 'success', providers: ['cloudflare'], now: '2026-10-08T20:00:00Z' })
-      assert.deepEqual(calls, { aws: 0, cloudflare: 1 })
+      assert.deepEqual(calls, { aws: 0, cloudflare: 1, openai: 0 })
       assert.equal(feed.providers.cloudflare.lastSyncedAt, '2026-10-08T20:00:00.000Z')
       assert.equal(feed.providers.aws.lastSyncedAt, '2026-10-08T19:00:00.000Z')
     })

@@ -6,6 +6,6 @@ import { LedgerError } from '../../data/ledger.ts'
 export default defineEventHandler(event => ledgerEndpoint(event, db => {
   const env = event.context.cloudflare?.env as Partial<CostSyncBindings> | undefined
   const requested = getQuery(event).provider
-  if (requested !== undefined && (typeof requested !== 'string' || !['aws', 'cloudflare'].includes(requested))) throw new LedgerError(400, 'Choose AWS or Cloudflare to refresh.')
-  return syncCosts({ DB: db, CREDENTIALS_KEY: env?.CREDENTIALS_KEY }, new Date(), {}, requested ? [requested as 'aws' | 'cloudflare'] : undefined)
+  if (requested !== undefined && (typeof requested !== 'string' || !['aws', 'cloudflare', 'openai'].includes(requested))) throw new LedgerError(400, 'Choose a supported provider to refresh.')
+  return syncCosts({ DB: db, CREDENTIALS_KEY: env?.CREDENTIALS_KEY }, new Date(), {}, requested ? [requested as 'aws' | 'cloudflare' | 'openai'] : undefined)
 }))

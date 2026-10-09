@@ -1,13 +1,14 @@
 import { isValidCostTimestamp } from '../domain/usage-costs.ts'
 import type { CostProvider } from '../domain/usage-costs.ts'
 
-export type ConnectionProvider = 'aws' | 'cloudflare' | 'hostinger'
+export type ConnectionProvider = 'aws' | 'cloudflare' | 'hostinger' | 'openai'
 export type ConnectionStatus = { configured: boolean; revision: number; updatedAt?: string }
 export type ConnectionStatuses = Record<ConnectionProvider, ConnectionStatus>
 export type ProviderCredentials = {
   aws: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
   cloudflare: { accountId: string; apiToken: string }
   hostinger: { apiToken: string }
+  openai: { adminApiKey: string }
 }
 export class ConnectionApiError extends Error {
   readonly status?: number
@@ -24,7 +25,7 @@ export function parseConnectionStatus(value: unknown): ConnectionStatus {
 export function parseConnectionStatuses(value: unknown): ConnectionStatuses {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectionApiError('Connection status could not be read. Reload connections before making changes.')
   const rows = value as Record<string, unknown>
-  return { aws: parseConnectionStatus(rows.aws), cloudflare: parseConnectionStatus(rows.cloudflare), hostinger: parseConnectionStatus(rows.hostinger) }
+  return { aws: parseConnectionStatus(rows.aws), cloudflare: parseConnectionStatus(rows.cloudflare), hostinger: parseConnectionStatus(rows.hostinger), openai: parseConnectionStatus(rows.openai ?? { configured: false, revision: 0 }) }
 }
 async function request(url: string, method: string, body?: unknown, headers: Record<string, string> = {}): Promise<Response> {
   let response: Response

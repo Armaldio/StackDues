@@ -12,7 +12,7 @@ export type CostFeed = Readonly<{
 }>
 
 export function emptyCostFeed(): CostFeed {
-  return { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' } } }
+  return { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' }, openai: { status: 'not-configured' } } }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -31,12 +31,12 @@ export function parseCostFeed(value: unknown): CostFeed {
   const providers = record(input.providers)
   if (!Array.isArray(input.snapshots)) throw new Error('Invalid cost snapshots')
   const statuses = {} as Record<CostProvider, ProviderSyncStatus>
-  for (const provider of ['aws', 'cloudflare'] as const) {
-    const state = record(providers[provider])
+  for (const provider of ['aws', 'cloudflare', 'openai'] as const) {
+    const state = record(providers[provider] ?? (provider === 'openai' ? { status: 'not-configured' } : undefined))
     if (state.status !== 'not-configured' && state.status !== 'synced' && state.status !== 'error') throw new Error('Invalid sync status')
     statuses[provider] = Object.freeze({
       status: state.status, lastAttemptAt: timestamp(state.lastAttemptAt), lastSyncedAt: timestamp(state.lastSyncedAt),
-      error: state.status === 'error' ? `${provider === 'aws' ? 'AWS' : 'Cloudflare'} refresh failed. Check the provider configuration and try again.` : undefined,
+      error: state.status === 'error' ? `${provider === 'aws' ? 'AWS' : provider === 'cloudflare' ? 'Cloudflare' : 'OpenAI'} refresh failed. Check the provider configuration and try again.` : undefined,
     })
   }
   const snapshots = input.snapshots.map((value: unknown) => {
