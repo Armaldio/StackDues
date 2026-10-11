@@ -133,46 +133,41 @@ test('Overview shows per-currency known spend, forecast completeness and the nex
   const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
   const nextDate = (days: number) => { const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
   await mockLedger(page, [
-    { id: 'usd-plan', name: 'USD Plan', billingType: 'fixed', amount: 15, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(2), status: 'active', revision: 1 },
-    { id: 'chatgpt-plus', name: 'ChatGPT Plus', billingType: 'fixed', amount: 20, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(2), status: 'active', revision: 1 },
-    { id: 'eur-plan', name: 'EUR Plan', billingType: 'fixed', amount: 10, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(7), status: 'active', revision: 1 },
-    { id: 'soonest', name: 'Soonest', billingType: 'fixed', amount: 5, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(1), status: 'active', revision: 1 },
+    { id: 'chatgpt-plus', name: 'ChatGPT Plus', billingType: 'fixed', amount: 1.49, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(2), status: 'active', revision: 1 },
+    { id: 'eur-plan', name: 'EUR Plan', billingType: 'fixed', amount: 37.99, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(7), status: 'active', revision: 1 },
+    { id: 'soonest', name: 'Soonest', billingType: 'fixed', amount: 5, currency: 'GBP', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(1), status: 'active', revision: 1 },
     { id: 'later', name: 'Later', billingType: 'fixed', amount: 8, currency: 'GBP', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(30), status: 'active', revision: 1 },
   ])
-  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: true, revision: 1 }, cloudflare: { configured: true, revision: 1 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: true, revision: 1 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 }, hostinger: { configured: false, revision: 0 } } }))
   await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [
-    { id: 'aws-actual', provider: 'aws', periodStart, periodEnd, amount: 4.5, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
-    { id: 'aws-forecast', provider: 'aws', periodStart, periodEnd, amount: 100, currency: 'USD', kind: 'forecast', capturedAt, metadata: { period: 'current' } },
-    { id: 'cf-actual', provider: 'cloudflare', periodStart, periodEnd, amount: 7, currency: 'EUR', kind: 'actual', capturedAt, metadata: { period: 'current' } },
-  ], providers: { aws: { status: 'synced', lastSyncedAt: capturedAt }, cloudflare: { status: 'synced', lastSyncedAt: capturedAt } } } }))
+    { id: 'cf-actual', provider: 'cloudflare', periodStart, periodEnd, amount: 12.8, currency: 'USD', kind: 'actual', capturedAt, metadata: { period: 'current' } },
+  ], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'synced', lastSyncedAt: capturedAt } } } }))
   await page.goto('/')
   const overview = page.locator('.overview-snapshot')
   const usd = overview.locator('.overview-currency-card').filter({ hasText: 'USD' })
   const eur = overview.locator('.overview-currency-card').filter({ hasText: 'EUR' })
-  await expect(usd).toContainText('USD 40.00')
-  await expect(usd).toContainText('USD 4.50')
+  await expect(usd).toContainText('USD 1.49')
+  await expect(usd).toContainText('USD 12.80')
   await expect(usd).toContainText('Fixed monthly equivalent')
   await expect(usd).toContainText('Metered actual')
-  await expect(usd).not.toContainText('USD 44.50')
+  await expect(usd).not.toContainText('USD 14.29')
   await expect(usd).not.toContainText('month to date')
-  await expect(eur).toContainText('EUR 10.00')
-  await expect(eur).toContainText('EUR 7.00')
+  await expect(eur).toContainText('EUR 37.99')
+  await expect(eur).toContainText('Not reported')
   await expect(eur).toContainText('Full-month forecast estimate')
   await expect(eur).toContainText('Unavailable')
   await expect(overview.locator('.overview-currency-card').filter({ hasText: 'GBP' })).toContainText('Not reported')
-  await expect(usd).toContainText(`Reported period · AWS · ${periodStart}–${periodEnd}`)
-  await expect(eur).toContainText(`Reported period · Cloudflare · ${periodStart}–${periodEnd}`)
+  await expect(usd).toContainText(`Reported period · Cloudflare · ${periodStart}–${periodEnd}`)
   const charges = page.locator('.overview-renewal-list li')
   await expect(charges).toHaveCount(3)
   await expect(charges.nth(0)).toContainText('Soonest')
-  await expect(charges.nth(0)).toContainText('USD 5.00')
+  await expect(charges.nth(0)).toContainText('GBP 5.00')
   await expect(charges.nth(0)).toContainText(new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${nextDate(1)}T00:00:00Z`)))
   await expect(charges.nth(1)).toContainText('ChatGPT Plus')
-  await expect(charges.nth(2)).toContainText('USD Plan')
-  await expect(charges.nth(2)).toContainText('USD 15.00')
-  await expect(charges.nth(1)).toContainText('USD 20.00')
+  await expect(charges.nth(1)).toContainText('USD 1.49')
+  await expect(charges.nth(2)).toContainText('EUR Plan')
+  await expect(charges.nth(2)).toContainText('EUR 37.99')
   await expect(charges).toHaveCount(3)
-  await expect(page.locator('.overview-renewal-list')).not.toContainText('EUR Plan')
   await expect(page.locator('.overview-renewal-list')).not.toContainText('Later')
   await expect(page.locator('.provider-observations')).not.toHaveAttribute('open', '')
   await expect(page.locator('.provider-overview-card').first()).toBeHidden()
