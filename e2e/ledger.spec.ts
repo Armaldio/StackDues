@@ -1028,6 +1028,71 @@ test('spending timeline filters 30/90/365-day windows without mixing renewals, a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
+test('payment schedule separates original renewal amounts, monthly averages, repeated totals, and currencies', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const dateOffset = (days: number) => { const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+  const capturedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+  await mockLedger(page, [
+    { id: 'chatgpt', name: 'ChatGPT Plus', billingType: 'fixed', amount: 23, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: dateOffset(5), status: 'active', revision: 1 },
+    { id: 'bitwarden', name: 'Bitwarden', billingType: 'fixed', amount: 17.82, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: dateOffset(40), status: 'active', revision: 1 },
+    { id: 'auto-hostinger', name: 'Hostinger VPS', provider: 'Hostinger', billingType: 'fixed', amount: 359.76, currency: 'EUR', recurrenceInterval: 2, recurrenceUnit: 'year', nextRenewalAt: '2028-07-31', status: 'active', revision: 1 },
+    { id: 'paused', name: 'Paused service', billingType: 'fixed', amount: 100, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: dateOffset(3), status: 'paused', revision: 1 },
+    { id: 'cancelled', name: 'Cancelled service', billingType: 'fixed', amount: 100, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: dateOffset(4), status: 'cancelled', revision: 1 },
+  ])
+  const hostinger = { externalId: 'host-vps', name: 'Hostinger VPS', status: 'active', recurrenceInterval: 24, recurrenceUnit: 'month', currency: 'EUR', totalPrice: 500, renewalPrice: 359.76, isAutoRenewed: true, createdAt: '2025-01-01T00:00:00.000Z', expiresAt: null, nextBillingAt: '2028-07-31T00:00:00.000Z', linkedSubscriptionId: 'auto-hostinger', automaticallyLinked: true, excluded: false, possibleMatches: [], providerNameCollision: false, seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 359.76 }
+  await page.route('**/api/connections', route => route.fulfill({ json: { aws: { configured: false, revision: 0 }, cloudflare: { configured: false, revision: 0 }, openai: { configured: false, revision: 0 }, digitalocean: { configured: false, revision: 0 }, hostinger: { configured: true, revision: 1 } } }))
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [hostinger], sync: { status: 'synced', lastAttemptAt: capturedAt, lastSyncedAt: capturedAt } } }))
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' }, openai: { status: 'not-configured' }, digitalocean: { status: 'not-configured' } } } }))
+  await page.goto('./history')
+  const timeline = page.locator('#timeline')
+  const schedule = timeline.locator('.timeline-lane').first()
+  await expect(schedule.getByRole('heading', { name: 'Payment schedule' })).toBeVisible()
+  await expect(schedule.getByRole('group', { name: 'Payment schedule horizon' }).getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(schedule.locator('.renewal-timeline-list li')).toHaveCount(1)
+  await expect(schedule).toContainText('ChatGPT Plus')
+  await expect(schedule).not.toContainText('Hostinger VPS')
+  await expect(schedule).toContainText('EUR 23.00')
+  await expect(schedule).toContainText('Monthly average: EUR 23.00')
+  await schedule.getByRole('button', { name: '12 months' }).click()
+  await expect(schedule.locator('.renewal-timeline-list li')).toHaveCount(2)
+  await expect(schedule.locator('.schedule-total')).toContainText('EUR 276.00')
+  await expect(schedule.locator('.schedule-total')).toContainText('USD 17.82')
+  await expect(schedule).not.toContainText('Hostinger VPS')
+  const threeYearButton = schedule.getByRole('group', { name: 'Payment schedule horizon' }).getByRole('button', { name: '3 years' })
+  await threeYearButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(schedule.locator('.renewal-timeline-list li')).toHaveCount(3)
+  const hostingerRow = schedule.locator('.renewal-timeline-list li').filter({ hasText: 'Hostinger VPS' })
+  await expect(hostingerRow).toHaveCount(1)
+  await expect(hostingerRow.locator('time')).toHaveAttribute('datetime', '2028-07-31')
+  await expect(hostingerRow).toContainText('EUR 359.76')
+  await expect(hostingerRow).toContainText('Monthly average: EUR 14.99')
+  await expect(schedule.locator('.schedule-total')).toContainText('EUR 1,187.76')
+  await expect(schedule.locator('.schedule-total')).toContainText('USD 53.46')
+  await expect(schedule.locator('.schedule-total')).toContainText('not confirmed payments')
+  await expect(schedule).not.toContainText('Paused service')
+  await expect(schedule).not.toContainText('Cancelled service')
+  await expect(schedule).not.toContainText('Paid')
+  await expect(schedule.locator('.renewal-timeline-list li').filter({ hasText: 'ChatGPT Plus' })).toHaveCount(1)
+  for (const width of [320, 375, 768, 1440]) {
+    await page.setViewportSize({ width, height: 850 })
+    await expect(schedule.getByRole('heading', { name: 'Payment schedule' })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `Payment schedule should fit at ${width}px`).toBe(true)
+  }
+  await page.goto('/')
+  const overviewScheduleLink = page.getByRole('link', { name: 'Full payment schedule' })
+  await expect(overviewScheduleLink).toHaveAttribute('href', '/history#timeline')
+  await overviewScheduleLink.click()
+  await expect(page).toHaveURL(/\/history#timeline$/)
+  await expect(page.locator('#timeline')).toBeVisible()
+  await page.goto('/services')
+  const servicesScheduleLink = page.getByRole('link', { name: 'Payment schedule' })
+  await expect(servicesScheduleLink).toHaveAttribute('href', '/history#timeline')
+  await servicesScheduleLink.click()
+  await expect(page).toHaveURL(/\/history#timeline$/)
+  await expect(page.locator('#timeline')).toBeVisible()
+})
+
 test('cost history defaults to latest observations, filters currencies and periods, and reveals older captures on demand', async ({ page }) => {
   const capturedAt = new Date().toISOString()
   const snapshots: Array<{ id: string; provider: string; periodStart: string; periodEnd: string; amount: number; currency: string; kind: string; capturedAt: string; metadata: Record<string, string> }> = Array.from({ length: 31 }, (_, index) => {
