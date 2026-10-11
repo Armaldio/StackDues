@@ -140,6 +140,16 @@ export function upcomingRenewals(subscriptions: readonly Subscription[], start: 
   return renewals.sort((a, b) => a.date.localeCompare(b.date) || a.subscription.id.localeCompare(b.subscription.id))
 }
 
+/** Keep only the next scheduled occurrence for each subscription, preserving date order. */
+export function nextDistinctRenewals(renewals: readonly Renewal[]): Renewal[] {
+  const seen = new Set<string>()
+  return renewals.filter(renewal => {
+    if (seen.has(renewal.subscription.id)) return false
+    seen.add(renewal.subscription.id)
+    return true
+  })
+}
+
 /** Sum scheduled original charges, independently of normalized comparison rates. */
 export function renewalChargeTotals(renewals: readonly Renewal[]): { currency: string; amount: number }[] {
   const totals = new Map<string, number>()
