@@ -7,6 +7,7 @@ import {
   normalizedTotals,
   nextRenewalOnOrAfter,
   upcomingRenewals,
+  nextDistinctRenewals,
   type Subscription,
 } from '../src/domain/subscriptions.ts'
 
@@ -26,6 +27,18 @@ test('yearly Bitwarden, four-year Hostinger and monthly VPS retain their origina
   assert.deepEqual(normalizedTotals([bitwarden, hostinger, vps]), [{ currency: 'USD', monthly: 16 + 10 / 12, yearly: 202 }])
   assert.deepEqual(upcomingRenewals([bitwarden, hostinger, vps], '2026-01-01', '2026-03-01').map(({ subscription, date, amount }) => [subscription.id, date, amount]), [
     ['vps', '2026-01-31', 12], ['bitwarden', '2026-02-01', 10], ['vps', '2026-02-28', 12], ['hostinger', '2026-03-01', 192],
+  ])
+})
+
+test('overview renewal selection keeps the soonest occurrence for each subscription id', () => {
+  const chatgpt = { ...vps, id: 'chatgpt-monthly', name: 'ChatGPT Plus', amount: 1.49, nextRenewalAt: '2026-01-01' }
+  const sameName = { ...chatgpt, id: 'chatgpt-team', amount: 8, nextRenewalAt: '2026-01-02' }
+  const annual = { ...vps, id: 'annual', name: 'Annual service', currency: 'EUR', amount: 37.99, recurrenceUnit: 'year' as const, nextRenewalAt: '2026-01-03' }
+  const occurrences = upcomingRenewals([chatgpt, sameName, annual], '2026-01-01', '2026-03-01')
+  assert.deepEqual(nextDistinctRenewals(occurrences).map(({ subscription, date }) => [subscription.id, date]), [
+    ['chatgpt-monthly', '2026-01-01'],
+    ['chatgpt-team', '2026-01-02'],
+    ['annual', '2026-01-03'],
   ])
 })
 
