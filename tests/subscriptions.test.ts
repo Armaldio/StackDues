@@ -42,6 +42,29 @@ test('overview renewal selection keeps the soonest occurrence for each subscript
   ])
 })
 
+test('three-year payment schedule keeps actual renewals, monthly comparisons, and currency totals distinct', () => {
+  const today = '2026-07-31'
+  const chatgpt = { ...vps, id: 'chatgpt', name: 'ChatGPT Plus', amount: 23, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month' as const, nextRenewalAt: '2026-08-01' }
+  const bitwarden = { ...vps, id: 'bitwarden', name: 'Bitwarden', amount: 17.82, currency: 'USD', recurrenceUnit: 'year' as const, nextRenewalAt: '2026-10-01' }
+  const hostinger = { ...vps, id: 'hostinger', name: 'Hostinger', amount: 359.76, currency: 'EUR', recurrenceInterval: 2, recurrenceUnit: 'year' as const, nextRenewalAt: '2028-07-31' }
+  const inactive = [{ ...chatgpt, id: 'paused', status: 'paused' as const }, { ...chatgpt, id: 'cancelled', status: 'cancelled' as const }]
+  const windowEnd = '2029-07-30'
+  const occurrences = upcomingRenewals([chatgpt, bitwarden, hostinger, ...inactive], today, windowEnd)
+  assert.equal(normalizeCost(chatgpt).monthly, 23)
+  assert.equal(normalizeCost(hostinger).monthly, 14.99)
+  assert.deepEqual(nextDistinctRenewals(occurrences).map(({ subscription, date, amount, currency }) => [subscription.name, date, amount, currency]), [
+    ['ChatGPT Plus', '2026-08-01', 23, 'EUR'],
+    ['Bitwarden', '2026-10-01', 17.82, 'USD'],
+    ['Hostinger', '2028-07-31', 359.76, 'EUR'],
+  ])
+  assert.deepEqual(renewalChargeTotals(occurrences), [
+    { currency: 'EUR', amount: 1187.76 },
+    { currency: 'USD', amount: 53.46 },
+  ])
+  assert.equal(occurrences.filter(row => row.subscription.id === 'chatgpt').length, 36)
+  assert.equal(occurrences.some(row => row.date > windowEnd), false)
+})
+
 test('normalization uses 365 days, 365/7 weeks and 12 months per year', () => {
   assert.deepEqual(normalizeCost({ ...vps, amount: 2, recurrenceInterval: 2, recurrenceUnit: 'day' }), { monthly: 365 / 12, yearly: 365 })
   assert.deepEqual(normalizeCost({ ...vps, amount: 14, recurrenceInterval: 2, recurrenceUnit: 'week' }), { monthly: 365 / 12, yearly: 365 })
