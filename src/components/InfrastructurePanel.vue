@@ -59,7 +59,7 @@ watch(() => props.initialFeed, next => { feed.value = next })
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
-        <p class="eyebrow">{{ total.currency }} · current reported period</p><strong>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</strong><span>Actual metered spend</span>
+        <p class="eyebrow">{{ total.currency }} · provider-reported period</p><strong>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</strong><span>Provider-reported usage</span>
         <p v-if="total.meteredForecast !== null">{{ money(total.meteredForecast, total.currency) }} forecast / month</p>
         <p v-else>Monthly forecast unavailable</p>
         <p v-if="total.combinedMonthlyEstimate !== null" class="combined-total">{{ money(total.combinedMonthlyEstimate, total.currency) }} tracked estimated monthly total, including fixed commitments</p>
@@ -75,7 +75,7 @@ watch(() => props.initialFeed, next => { feed.value = next })
         <p v-if="isProviderStale(feed.providers[provider])" class="feed-warning">Data is over 36 hours old. The last successful observations are retained.</p>
         <template v-if="current(provider).length">
           <div v-for="snapshot in current(provider)" :key="snapshot.id" class="provider-cost">
-            <strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><span>{{ provider === 'digitalocean' ? `Finalized invoice total · ${snapshot.periodStart.slice(0, 7)}` : provider === 'cloudflare' ? 'Billing period to date' : provider === 'openai' ? 'Organization-reported API costs · month to date' : 'Month to date' }}</span>
+            <strong>{{ money(snapshot.amount, snapshot.currency) }}</strong><span>{{ provider === 'digitalocean' ? `Finalized invoice total · ${snapshot.periodStart.slice(0, 7)}` : provider === 'cloudflare' ? 'Cloudflare-reported usage · billing period to date' : provider === 'openai' ? 'Organization-reported API costs · month to date' : 'AWS-reported usage · month to date' }}</span>
             <p>{{ snapshot.periodStart }} → {{ snapshot.periodEnd }} (end exclusive)</p>
             <p v-if="previous(provider, snapshot.currency)">{{ money(previous(provider, snapshot.currency)!.amount, snapshot.currency) }} in the comparable previous-month period</p>
             <p v-if="forecast(provider, snapshot.currency)">{{ money(forecast(provider, snapshot.currency)!.amount, snapshot.currency) }} whole-month forecast</p>
@@ -85,7 +85,7 @@ watch(() => props.initialFeed, next => { feed.value = next })
             <dl v-if="breakdown(snapshot.metadata?.breakdown).length" class="service-breakdown"><div v-for="service in breakdown(snapshot.metadata?.breakdown)" :key="service.service"><dt>{{ service.service }}</dt><dd>{{ money(service.amount, service.currency) }}</dd></div></dl>
           </div>
         </template>
-        <p v-else class="provider-empty">{{ !configuredProviders.includes(provider) ? 'Connect your account to see reported usage costs here.' : 'No reported charges are available yet.' }}</p>
+        <p v-else class="provider-empty">{{ !configuredProviders.includes(provider) ? 'Connect your account to see reported usage costs here.' : feed.providers[provider].status === 'error' ? 'Usage is unavailable; see the sync warning above.' : 'No provider usage report is available yet.' }}</p>
         <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>
