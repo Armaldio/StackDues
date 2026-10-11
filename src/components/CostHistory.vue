@@ -27,7 +27,7 @@ function period(snapshot: CostSnapshot) {
     : snapshot.metadata?.scope === 'billing-period-to-date' ? 'Billing period to date'
     : snapshot.metadata?.period === 'previous-comparable' ? 'Previous comparison'
       : snapshot.metadata?.period === 'previous-month' ? 'Previous month'
-        : snapshot.metadata?.period === 'current' ? 'Current month' : 'Provider-reported period'
+        : snapshot.metadata?.period === 'current' ? 'Current reported period' : 'Provider-reported period'
   return typeof snapshot.metadata?.reportedThrough === 'string' ? `${label} · through ${snapshot.metadata.reportedThrough}` : label
 }
 function kind(snapshot: CostSnapshot) {
