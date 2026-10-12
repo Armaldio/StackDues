@@ -16,7 +16,7 @@ import { overviewInsights } from './domain/overview-insights'
 import { hostingerCoverage } from './domain/hostinger-coverage'
 import { fetchConnections, type ConnectionStatuses } from './lib/connection-api'
 import { readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
-import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
+import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, SubscriptionRequestFailure, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 
 const costFeed = ref(emptyCostFeed())
 const financialRefreshError = ref('')
@@ -107,6 +107,11 @@ onUnmounted(() => {
 })
 const showForm = ref(false)
 const editing = ref<StoredSubscription>()
+const formSaveFailure = ref<SubscriptionRequestFailure | null>(null)
+const formRecoveryNotice = ref('')
+const formReviewRequired = ref(false)
+const formCheckingSave = ref(false)
+const formCanRetry = ref(true)
 let lastFormTrigger: HTMLElement | null = null
 const search = ref('')
 const statusFilter = ref('all')
@@ -237,10 +242,12 @@ function openForm(item?: StoredSubscription, trigger?: HTMLElement) {
   if (blocked.value) return
   const target = trigger ?? document.activeElement
   lastFormTrigger = target instanceof HTMLElement ? target : null
+  formSaveFailure.value = null; formRecoveryNotice.value = ''; formReviewRequired.value = false; formCheckingSave.value = false; formCanRetry.value = true
   editing.value = item; showForm.value = true
 }
 async function closeForm() {
   showForm.value = false
+  formSaveFailure.value = null; formRecoveryNotice.value = ''; formReviewRequired.value = false; formCheckingSave.value = false; formCanRetry.value = true
   await nextTick()
   restoreFormFocus()
 }
@@ -250,15 +257,67 @@ function restoreFormFocus() {
 }
 function mutationError(cause: unknown) { storageError.value = cause instanceof Error ? cause.message : 'Changes could not be confirmed. Reload before making changes.' }
 async function save(item: Subscription) {
-  if (blocked.value) return
+  if (blocked.value || formSaveFailure.value || !formCanRetry.value) return
   busy.value = true
   try {
     const saved = editing.value ? await updateStoredSubscription(item, editing.value.revision) : await createStoredSubscription(item)
     if (saved.id !== item.id) throw new Error('The saved subscription could not be confirmed. Reload before making changes.')
     subscriptions.value = subscriptions.value.some(({ id }) => id === saved.id) ? subscriptions.value.map(existing => existing.id === saved.id ? saved : existing) : [...subscriptions.value, saved]
-    storageError.value = null; notice.value = `${item.name} saved.`; await closeForm()
-  } catch (cause) { mutationError(cause) }
+    storageError.value = null; formSaveFailure.value = null; formRecoveryNotice.value = ''; notice.value = `${item.name} saved.`; await closeForm()
+  } catch (cause) {
+    formSaveFailure.value = cause instanceof SubscriptionRequestFailure
+      ? cause
+      : new SubscriptionRequestFailure('uncertain', cause instanceof Error ? cause.message : 'The save could not be confirmed. Your draft is still here; check its save status before retrying.')
+    formRecoveryNotice.value = ''
+    formCanRetry.value = false
+  }
   finally { busy.value = false; await nextTick(); restoreFormFocus() }
+}
+function sameSubscription(left: Subscription, right: Subscription) {
+  return left.id === right.id && left.name === right.name && (left.provider ?? '') === (right.provider ?? '') && left.billingType === right.billingType && left.amount === right.amount && left.currency === right.currency && left.recurrenceInterval === right.recurrenceInterval && left.recurrenceUnit === right.recurrenceUnit && left.nextRenewalAt === right.nextRenewalAt && left.status === right.status
+}
+async function checkFormSave(item: Subscription) {
+  if (formCheckingSave.value) return
+  formCheckingSave.value = true
+  formRecoveryNotice.value = ''
+  try {
+    const latest = await fetchSubscriptions()
+    subscriptions.value = latest; loaded.value = true; storageError.value = null
+    const current = latest.find(candidate => candidate.id === item.id)
+    if (current && sameSubscription(current, item)) {
+      notice.value = `${item.name} was saved and confirmed.`
+      await closeForm()
+      return
+    }
+    if (editing.value && !current) {
+      formSaveFailure.value = new SubscriptionRequestFailure('conflict', 'This subscription is no longer in the ledger. Your draft is still here; copy it before closing or contact support.')
+      formCanRetry.value = false
+      return
+    }
+    if (current) {
+      const previousRevision = editing.value?.revision
+      editing.value = current
+      formReviewRequired.value = previousRevision === undefined || current.revision !== previousRevision
+      formRecoveryNotice.value = formReviewRequired.value
+        ? 'A newer saved version is available below. Review its changes before saving your draft.'
+        : 'The latest ledger is loaded. Your draft is still here and can be retried safely.'
+      formCanRetry.value = true
+    } else {
+      formReviewRequired.value = false
+      formRecoveryNotice.value = 'No saved copy was found. Your draft is preserved and can be retried safely.'
+      formCanRetry.value = true
+    }
+    formSaveFailure.value = null
+  } catch (cause) {
+    formSaveFailure.value = cause instanceof SubscriptionRequestFailure
+      ? cause
+      : new SubscriptionRequestFailure('unavailable', 'Subscriptions could not be checked. Your draft is still here; try again when storage is available.')
+    formCanRetry.value = false
+  } finally { formCheckingSave.value = false }
+}
+function confirmLatestForDraft() {
+  formReviewRequired.value = false
+  formRecoveryNotice.value = 'Your draft will be saved using the latest revision.'
 }
 async function setStatus(item: StoredSubscription) {
   if (blocked.value) return
@@ -410,6 +469,6 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       <footer class="app-footer"><span>StackDues</span><p>Fixed subscriptions are saved privately to your account. Existing browser data remains untouched.</p></footer>
     </main>
   </div>
-  <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-error="storageError" :saving="busy" :aria-busy="busy" @save="save" @close="closeForm" />
+  <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-failure="formSaveFailure" :recovery-notice="formRecoveryNotice" :review-required="formReviewRequired" :can-retry="formCanRetry" :checking-save="formCheckingSave" :saving="busy" :aria-busy="busy" @save="save" @check-save="checkFormSave" @confirm-latest="confirmLatestForDraft" @close="closeForm" />
   <ServiceDetail v-if="serviceSelection" :selection="serviceSelection" :feed="costFeed" :subscriptions="subscriptions" :subscriptions-loaded="loaded" :today="today" :hostinger-sync="hostingerState?.sync" :hostinger-rows="hostingerState?.subscriptions" @close="closeServiceDetails" @edit="editDetailedSubscription" />
 </template>

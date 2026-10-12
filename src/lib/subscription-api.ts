@@ -4,6 +4,16 @@ export type StoredSubscription = Subscription & { revision: number }
 export type ImportResult = { subscriptions: StoredSubscription[]; createdIds: string[] }
 export const SUBSCRIPTION_EXPORT_FILENAME = 'stackdues-subscriptions.json'
 
+export type SubscriptionRequestFailureKind = 'session' | 'conflict' | 'uncertain' | 'unavailable' | 'rejected'
+export class SubscriptionRequestFailure extends Error {
+  readonly kind: SubscriptionRequestFailureKind
+  constructor(kind: SubscriptionRequestFailureKind, message: string) {
+    super(message)
+    this.name = 'SubscriptionRequestFailure'
+    this.kind = kind
+  }
+}
+
 /** Serialize only importer-compatible subscription fields; never include server revisions or other record properties. */
 export function serializeSubscriptionExport(records: readonly StoredSubscription[]): string {
   if (records.length > 1_000) throw new Error('This export exceeds the 1,000-subscription import limit.')
@@ -36,14 +46,23 @@ async function request(path = '', method = 'GET', body?: unknown, headers: Recor
       headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-  } catch { throw new Error('Subscription storage could not be reached. Your displayed records have been kept. Reload before making changes.') }
+  } catch {
+    throw new SubscriptionRequestFailure(method === 'GET' ? 'unavailable' : 'uncertain', method === 'GET'
+      ? 'Subscription storage could not be reached. Your displayed records have been kept.'
+      : 'The save could not be confirmed. Your draft is still here; check its save status before retrying.')
+  }
   if (!response.ok) {
-    if (response.status === 401) throw new Error('Your session expired. Sign in again, then reload subscriptions. Changes were not saved.')
-    if (response.status === 409) throw new Error('This subscription changed on another device. Reload subscriptions before editing again. Your changes did not overwrite it.')
-    throw new Error('The ledger request failed. Your displayed records have been kept. Reload before making changes.')
+    if (response.status === 401) throw new SubscriptionRequestFailure('session', 'Your session expired. Sign in again to continue. Your draft is still here.')
+    if (response.status === 409) throw new SubscriptionRequestFailure('conflict', 'This subscription changed on another device. Your draft is still here; reload the latest version to review it.')
+    if (method !== 'GET' && response.status >= 500) throw new SubscriptionRequestFailure('uncertain', 'The save could not be confirmed. Your draft is still here; check its save status before retrying.')
+    throw new SubscriptionRequestFailure(response.status >= 500 ? 'unavailable' : 'rejected', 'The ledger request could not be completed. Your displayed records have been kept.')
   }
   try { return await response.json() }
-  catch { throw new Error('The server response could not be read. Reload the ledger to check whether your changes were saved.') }
+  catch {
+    throw new SubscriptionRequestFailure(method === 'GET' ? 'unavailable' : 'uncertain', method === 'GET'
+      ? 'The server response could not be read. Reload the ledger before making changes.'
+      : 'The save response could not be read. Your draft is still here; check whether your changes were saved before retrying.')
+  }
 }
 
 export async function fetchSubscriptions(): Promise<StoredSubscription[]> { return parseStoredSubscriptions(await request()) }

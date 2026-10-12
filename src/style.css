@@ -213,6 +213,17 @@ tbody tr:last-child > * { border-bottom: 0; }
 .form-note { color: var(--muted); font-size: .7rem; margin-top: .25rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .75rem; border-top: 1px solid var(--line); padding-top: 1.25rem; margin-top: 1.5rem; }
 .error-message { padding: 1rem; border: 1px solid #d8a48f; border-radius: 3px; background: #f9e8df; color: #853423; font-size: .8rem; margin: 1rem 0; }
+.form-recovery-error p + p, .latest-version p + p { margin-top: .5rem; }
+.form-recovery-error:focus { outline: 2px solid #853423; outline-offset: 2px; }
+.form-recovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; margin-top: .75rem; }
+.form-recovery-actions > * { min-height: 44px; }
+.latest-version { padding: 1rem; margin: 1rem 0; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--bg); font-size: .8rem; }
+.latest-version h3 { margin-bottom: .5rem; font-size: .9rem; }
+.latest-version ul { margin: .75rem 0; padding-left: 1.25rem; }
+.latest-version li { margin: .35rem 0; overflow-wrap: anywhere; }
+.latest-version button { margin-top: .75rem; white-space: normal; }
+.form-recovery-notice { margin: .75rem 0; padding: .75rem; border-left: 3px solid var(--accent); background: var(--bg); font-size: .8rem; }
+.subscription-dialog textarea[data-draft-copy] { display: block; width: 100%; min-height: 8rem; margin: .75rem 0; padding: .75rem; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: .75rem/1.45 var(--mono); }
 .storage-error { margin-bottom: 1.5rem; }
 @media (min-width: 1600px) { main { margin: 0 auto; } }
 @media (max-width: 1250px) {
