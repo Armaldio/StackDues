@@ -1081,16 +1081,16 @@ test('payment schedule separates original renewal amounts, monthly averages, rep
   }
   await page.goto('/')
   const overviewScheduleLink = page.getByRole('link', { name: 'Full payment schedule' })
-  await expect(overviewScheduleLink).toHaveAttribute('href', '/history#timeline')
+  await expect(overviewScheduleLink).toHaveAttribute('href', '/history#payment-schedule')
   await overviewScheduleLink.click()
-  await expect(page).toHaveURL(/\/history#timeline$/)
-  await expect(page.locator('#timeline')).toBeVisible()
+  await expect(page).toHaveURL(/\/history#payment-schedule$/)
+  await expect(page.locator('#payment-schedule')).toBeVisible()
   await page.goto('/services')
   const servicesScheduleLink = page.getByRole('link', { name: 'Payment schedule' })
-  await expect(servicesScheduleLink).toHaveAttribute('href', '/history#timeline')
+  await expect(servicesScheduleLink).toHaveAttribute('href', '/history#payment-schedule')
   await servicesScheduleLink.click()
-  await expect(page).toHaveURL(/\/history#timeline$/)
-  await expect(page.locator('#timeline')).toBeVisible()
+  await expect(page).toHaveURL(/\/history#payment-schedule$/)
+  await expect(page.locator('#payment-schedule')).toBeVisible()
 })
 
 test('cost history defaults to latest observations, filters currencies and periods, and reveals older captures on demand', async ({ page }) => {
