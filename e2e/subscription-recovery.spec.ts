@@ -229,3 +229,37 @@ test('Escape closes a recovered save error and returns focus to the trigger', as
   await expect(form).not.toBeVisible()
   await expect(trigger).toBeFocused()
 })
+
+test('a late save-status response cannot close or overwrite a newly opened draft', async ({ page }) => {
+  let saved: Row | undefined
+  let checking = false
+  let releaseCheck!: () => void
+  const pendingCheck = new Promise<void>(resolve => { releaseCheck = resolve })
+  await routeNonLedger(page)
+  await page.route('**/api/subscriptions**', async route => {
+    if (route.request().method() === 'POST') {
+      saved = { ...route.request().postDataJSON(), revision: 1 }
+      return route.fulfill({ status: 503, json: { error: 'response uncertain' } })
+    }
+    if (saved) { checking = true; await pendingCheck }
+    return route.fulfill({ json: saved ? [saved] : [] })
+  })
+  await page.goto('/services')
+  const add = page.getByRole('button', { name: 'Add manually', exact: true }).first()
+  await add.click()
+  const form = page.getByRole('dialog')
+  await form.getByLabel('Name', { exact: true }).fill('First draft')
+  await form.getByLabel('Amount per charge').fill('9')
+  await form.getByRole('button', { name: 'Save subscription' }).click()
+  await form.getByRole('button', { name: 'Check save status' }).click()
+  await expect.poll(() => checking).toBe(true)
+  await form.getByRole('button', { name: 'Close subscription form' }).click()
+  await add.click()
+  await form.getByLabel('Name', { exact: true }).fill('New draft stays here')
+  const response = page.waitForResponse(response => response.url().includes('/api/subscriptions') && response.request().method() === 'GET')
+  releaseCheck()
+  await (await response).finished()
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await expect(form.getByLabel('Name', { exact: true })).toHaveValue('New draft stays here')
+  await expect(form.getByRole('button', { name: 'Save subscription' })).toBeEnabled()
+})

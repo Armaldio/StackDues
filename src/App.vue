@@ -118,6 +118,7 @@ const formSaveFailure = ref<SubscriptionRequestFailure | null>(null)
 const formRecoveryNotice = ref('')
 const formReviewRequired = ref(false)
 const formCheckingSave = ref(false)
+let formSession = 0
 const formCanRetry = ref(true)
 let lastFormTrigger: HTMLElement | null = null
 const search = ref('')
@@ -247,12 +248,14 @@ function periodDescription(provider: 'aws' | 'cloudflare' | 'openai', currency: 
 function recurrence(item: Subscription) { return `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` }
 function openForm(item?: StoredSubscription, trigger?: HTMLElement) {
   if (blocked.value) return
+  formSession++
   const target = trigger ?? document.activeElement
   lastFormTrigger = target instanceof HTMLElement ? target : null
   formSaveFailure.value = null; formRecoveryNotice.value = ''; formReviewRequired.value = false; formCheckingSave.value = false; formCanRetry.value = true
   editing.value = item; showForm.value = true
 }
 async function closeForm() {
+  formSession++
   showForm.value = false
   formSaveFailure.value = null; formRecoveryNotice.value = ''; formReviewRequired.value = false; formCheckingSave.value = false; formCanRetry.value = true
   await nextTick()
@@ -285,10 +288,12 @@ function sameSubscription(left: Subscription, right: Subscription) {
 }
 async function checkFormSave(item: Subscription) {
   if (formCheckingSave.value) return
+  const session = formSession
   formCheckingSave.value = true
   formRecoveryNotice.value = ''
   try {
     const latest = await fetchSubscriptions()
+    if (session !== formSession || !showForm.value) return
     subscriptions.value = latest; loaded.value = true; storageError.value = null
     const current = latest.find(candidate => candidate.id === item.id)
     if (current && sameSubscription(current, item)) {
@@ -316,11 +321,12 @@ async function checkFormSave(item: Subscription) {
     }
     formSaveFailure.value = null
   } catch (cause) {
+    if (session !== formSession || !showForm.value) return
     formSaveFailure.value = cause instanceof SubscriptionRequestFailure
       ? cause
       : new SubscriptionRequestFailure('unavailable', 'Subscriptions could not be checked. Your draft is still here; try again when storage is available.')
     formCanRetry.value = false
-  } finally { formCheckingSave.value = false }
+  } finally { if (session === formSession) formCheckingSave.value = false }
 }
 function confirmLatestForDraft() {
   formReviewRequired.value = false
