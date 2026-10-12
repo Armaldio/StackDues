@@ -11,6 +11,11 @@ export type CostFeed = Readonly<{
   providers: Readonly<Record<CostProvider, ProviderSyncStatus>>
 }>
 
+export class CostFeedReadError extends Error {
+  readonly status?: number
+  constructor(message: string, status?: number) { super(message); this.name = 'CostFeedReadError'; this.status = status }
+}
+
 export function emptyCostFeed(): CostFeed {
   return { snapshots: [], providers: { aws: { status: 'not-configured' }, cloudflare: { status: 'not-configured' }, openai: { status: 'not-configured' }, digitalocean: { status: 'not-configured' } } }
 }
@@ -72,9 +77,12 @@ export function parseCostFeed(value: unknown): CostFeed {
 }
 
 export async function fetchCostFeed(url: string, request: typeof fetch = fetch): Promise<CostFeed> {
-  const response = await request(url, { cache: 'no-store', signal: AbortSignal.timeout(15000) })
-  if (!response.ok) throw new Error('Cost data could not be loaded. Previous observations are still displayed.')
-  return parseCostFeed(await response.json())
+  let response: Response
+  try { response = await request(url, { cache: 'no-store', signal: AbortSignal.timeout(15000) }) }
+  catch { throw new CostFeedReadError('Cost data could not be loaded. Previous observations are still displayed.') }
+  if (!response.ok) throw new CostFeedReadError(response.status === 401 ? 'Your session expired. Sign in again to load billing data.' : 'Cost data could not be loaded. Previous observations are still displayed.', response.status)
+  try { return parseCostFeed(await response.json()) }
+  catch (cause) { throw cause instanceof CostFeedReadError ? cause : new CostFeedReadError('Cost data could not be read. Previous observations are still displayed.') }
 }
 
 export function isProviderStale(status: ProviderSyncStatus, now = new Date()): boolean {

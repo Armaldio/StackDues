@@ -10,19 +10,27 @@ import ServiceDetail from './components/ServiceDetail.vue'
 import SpendingTimeline from './components/SpendingTimeline.vue'
 import type { ServiceSelection } from './domain/service-selection'
 import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, upcomingRenewals, type Subscription } from './domain/subscriptions'
-import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale } from './lib/cost-feed'
+import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, CostFeedReadError } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
 import { hostingerCoverage } from './domain/hostinger-coverage'
-import { fetchConnections, type ConnectionStatuses } from './lib/connection-api'
-import { readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
+import { ConnectionApiError, fetchConnections, type ConnectionStatuses } from './lib/connection-api'
+import { HostingerApiError, readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, SubscriptionRequestFailure, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
+import { failedReadState, successfulReadState, type DataReadState } from './domain/data-read-state'
 
 const costFeed = ref(emptyCostFeed())
 const financialRefreshError = ref('')
-const costFeedResolved = ref(false)
+const costFeedReadState = ref<DataReadState>('pending')
+const costFeedReadAt = ref<string>()
+const costFeedReadError = ref('')
+const connectionReadState = ref<DataReadState>('pending')
+const connectionReadAt = ref<string>()
 const connectionStatusesResolved = ref(false)
 const connectionStatusesError = ref(false)
+const hostingerReadState = ref<DataReadState>('pending')
+const hostingerReadAt = ref<string>()
+const hostingerReadError = ref('')
 const hostingerStateResolved = ref(false)
 const connectionStatuses = ref<ConnectionStatuses>()
 const hostingerState = ref<HostingerState>()
@@ -42,12 +50,19 @@ const storageError = ref<string | null>(null)
 const loading = ref(true)
 const busy = ref(false)
 const loaded = ref(false)
+const subscriptionsReadAt = ref<string>()
+const subscriptionsReadState = ref<DataReadState>('pending')
 const blocked = computed(() => loading.value || busy.value || !loaded.value || storageError.value !== null)
+function readIsExpired(cause: unknown) {
+  return (cause instanceof CostFeedReadError || cause instanceof ConnectionApiError || cause instanceof HostingerApiError) && cause.status === 401
+    || cause instanceof Error && ('kind' in cause && cause.kind === 'session' || cause.message.includes('Your session expired.'))
+}
+function readTime(value?: string) { return value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '' }
 async function reloadLedger() {
   if (loading.value && loaded.value) return
   loading.value = true
-  try { subscriptions.value = await fetchSubscriptions(); storageError.value = null; loaded.value = true }
-  catch (cause) { storageError.value = cause instanceof Error ? cause.message : 'Subscriptions could not be loaded. Reload before making changes.' }
+  try { subscriptions.value = await fetchSubscriptions(); storageError.value = null; loaded.value = true; subscriptionsReadAt.value = new Date().toISOString(); subscriptionsReadState.value = successfulReadState(subscriptions.value.length > 0) }
+  catch (cause) { storageError.value = cause instanceof Error ? cause.message : 'Subscriptions could not be loaded. Reload before making changes.'; subscriptionsReadState.value = failedReadState(loaded.value, readIsExpired(cause)) }
   finally { loading.value = false }
 }
 const legacyPaths: Record<string, string> = { overview: '/', subscriptions: '/services', connections: '/connections', history: '/history', infrastructure: '/services', 'hostinger-discovery': '/services' }
@@ -58,9 +73,9 @@ function normalizeLegacyHash(hash = route.value.hash) {
 watch(() => route.value.hash, hash => { if (hash) normalizeLegacyHash(hash) })
 onMounted(() => {
   void reloadLedger()
-  void fetchCostFeed('/api/costs').then(feed => { setCostFeed(feed); financialRefreshError.value = '' }).catch(() => { financialRefreshError.value = 'Saved billing data could not be checked. Previously displayed observations remain available.' }).finally(() => { costFeedResolved.value = true })
-  void fetchConnections().then(statuses => { connectionStatuses.value = statuses }).catch(() => { connectionStatusesError.value = true }).finally(() => { connectionStatusesResolved.value = true })
-  void readHostingerDiscovery().then(setHostingerState).catch(() => {}).finally(() => { hostingerStateResolved.value = true })
+  void fetchCostFeed('/api/costs').then(feed => { setCostFeed(feed); financialRefreshError.value = ''; costFeedReadError.value = '' }).catch(cause => { costFeedReadState.value = failedReadState(!!costFeedReadAt.value, readIsExpired(cause)); costFeedReadError.value = cause instanceof Error ? cause.message : 'Saved billing data could not be loaded.' })
+  void fetchConnections().then(statuses => { connectionStatuses.value = statuses; connectionReadState.value = successfulReadState(true); connectionReadAt.value = new Date().toISOString() }).catch(cause => { connectionStatusesError.value = true; connectionReadState.value = failedReadState(!!connectionReadAt.value, readIsExpired(cause)) }).finally(() => { connectionStatusesResolved.value = true })
+  void readHostingerDiscovery().then(setHostingerState).catch(cause => { hostingerReadState.value = failedReadState(!!hostingerReadAt.value, readIsExpired(cause)); hostingerReadError.value = cause instanceof Error ? cause.message : 'Hostinger services could not be loaded.' }).finally(() => { hostingerStateResolved.value = true })
   normalizeLegacyHash(route.value.hash)
   void focusPaymentScheduleTarget()
   if (!routeSections[route.value.path]) void router.replace('/')
@@ -91,12 +106,22 @@ async function refreshPersistedFinancialData(force = false) {
     fetchConnections(),
   ]).then(results => {
     if (revision !== financialReadRevision) return
-    if (results[0]!.status === 'fulfilled') applyCostFeed(results[0]!.value)
-    if (results[1]!.status === 'fulfilled') hostingerState.value = results[1]!.value
+    if (results[0]!.status === 'fulfilled') {
+      applyCostFeed(results[0]!.value); costFeedReadState.value = successfulReadState(results[0]!.value.snapshots.length > 0); costFeedReadAt.value = new Date().toISOString(); costFeedReadError.value = ''
+    } else {
+      costFeedReadState.value = failedReadState(!!costFeedReadAt.value, readIsExpired(results[0]!.reason)); costFeedReadError.value = results[0]!.reason instanceof Error ? results[0]!.reason.message : 'Saved billing data could not be loaded.'
+    }
+    if (results[1]!.status === 'fulfilled') {
+      hostingerState.value = results[1]!.value; hostingerReadState.value = successfulReadState(results[1]!.value.subscriptions.length > 0); hostingerReadAt.value = new Date().toISOString(); hostingerReadError.value = ''
+    } else {
+      hostingerReadState.value = failedReadState(!!hostingerReadAt.value, readIsExpired(results[1]!.reason)); hostingerReadError.value = results[1]!.reason instanceof Error ? results[1]!.reason.message : 'Hostinger services could not be loaded.'
+    }
     if (results[2]!.status === 'fulfilled') setConnectionStatuses(results[2]!.value)
-    else connectionStatusesError.value = true
+    else { connectionStatusesError.value = true; connectionReadState.value = failedReadState(!!connectionReadAt.value, readIsExpired(results[2]!.reason)) }
     financialRefreshError.value = results.slice(0, 2).some(result => result.status === 'rejected')
-      ? 'Saved billing data could not be checked. Previously displayed observations remain available.'
+      ? ['retained', 'retained-expired'].includes(costFeedReadState.value) || ['retained', 'retained-expired'].includes(hostingerReadState.value)
+        ? 'Saved billing data could not be checked. Previously displayed observations remain available.'
+        : 'Saved billing data could not be checked. No earlier observations are available for one or more sources.'
       : ''
   }).finally(() => { if (financialRefresh === operation) financialRefresh = undefined })
   financialRefresh = operation
@@ -188,6 +213,14 @@ const meterSnapshots = computed(() => currentCostSnapshots(costFeed.value))
 function providerIsConfigured(provider: 'aws' | 'cloudflare' | 'openai' | 'digitalocean') {
   return connectionStatuses.value ? connectionStatuses.value[provider].configured : costFeed.value.providers[provider].status !== 'not-configured'
 }
+function providerConnectionNote(provider: 'aws' | 'cloudflare' | 'openai' | 'digitalocean') {
+  if (connectionReadState.value === 'pending') return 'Checking saved connection status…'
+  if (!connectionStatuses.value && connectionStatusesError.value) return 'Connection status unavailable; saved access has not been confirmed.'
+  if (!providerIsConfigured(provider)) return 'Not connected'
+  if (costFeedReadState.value === 'pending') return 'Checking saved billing observations…'
+  if (hasCostReadFailure.value) return 'Billing observations unavailable; retry the data check.'
+  return costFeed.value.providers[provider].status === 'synced' ? 'Checked successfully; no current billing data was returned.' : 'Credentials saved; waiting for the first successful billing sync.'
+}
 function hostingerIsConfigured() { return connectionStatuses.value ? connectionStatuses.value.hostinger.configured : !!hostingerState.value && hostingerState.value.sync.status !== 'not-configured' }
 const connectedMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(providerIsConfigured))
 const connectedBillingProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(providerIsConfigured))
@@ -203,6 +236,10 @@ const actualPeriodLabels = computed(() => Object.fromEntries(trackedTotals.value
   return usage ? `${providerName(provider)} · ${periodDescription(provider, currency)}` : null
 }).filter((value): value is string => value !== null).join(' · ')])))
 function meteredStatus(currency: string) {
+  if (costFeedReadState.value === 'pending') return 'Checking saved billing observations'
+  if (['unavailable', 'expired'].includes(costFeedReadState.value)) return 'Billing observations unavailable; retry the data check'
+  if (connectionReadState.value === 'pending') return 'Checking saved provider connections'
+  if (connectionStatusesError.value && !connectionStatuses.value) return 'Provider connection status unavailable'
   if (!connectedMeteredProviders.value.length) return 'No connected usage provider'
   if (connectedMeteredProviders.value.some(provider => costFeed.value.providers[provider].status === 'error')) return 'Usage unavailable; see provider status'
   if (connectedMeteredProviders.value.some(provider => costFeed.value.providers[provider].status === 'synced')) return `No ${currency} usage report`
@@ -231,8 +268,47 @@ const meteredWarning = computed(() => {
 })
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
 const currentHostingerLedger = computed(() => new Set((hostingerState.value?.subscriptions ?? []).filter(item => item.seenInLatestSync && hostingerState.value?.sync.status === 'synced').map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
-const confirmedSubscriptions = computed(() => subscriptions.value.filter(item => item.provider !== 'Hostinger' || !hostingerState.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id) || currentHostingerLedger.value.has(item.id)))
+const confirmedSubscriptions = computed(() => subscriptions.value.filter(item => {
+  if (item.provider !== 'Hostinger') return true
+  const linkedSource = hostingerState.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id) ?? false
+  if (linkedSource) return currentHostingerLedger.value.has(item.id)
+  // A provider label alone does not prove this manual ledger row is linked to
+  // Hostinger discovery. Keep independent saved commitments during read failures.
+  return true
+}))
 const hostingerCoverageWarning = computed(() => hostingerStateResolved.value ? hostingerCoverage(hostingerState.value, hostingerIsConfigured()) : '')
+const currentSubscriptionsReadState = computed(() => loaded.value && !storageError.value ? successfulReadState(subscriptions.value.length > 0) : subscriptionsReadState.value)
+const paymentScheduleReadState = computed<DataReadState>(() => {
+  if (['pending', 'unavailable', 'expired'].includes(currentSubscriptionsReadState.value)) return currentSubscriptionsReadState.value
+  if (connectionReadState.value === 'pending') return 'pending'
+  if (!connectionStatuses.value && ['unavailable', 'expired'].includes(connectionReadState.value)) return connectionReadState.value
+  if (connectionStatuses.value?.hostinger.configured) {
+    if (hostingerState.value?.sync.status === 'error') return hostingerState.value.subscriptions.length ? 'retained' : 'unavailable'
+    if (['pending', 'unavailable', 'expired', 'retained', 'retained-expired'].includes(hostingerReadState.value)) return hostingerReadState.value
+  }
+  return currentSubscriptionsReadState.value
+})
+const hasCostReadFailure = computed(() => ['unavailable', 'expired'].includes(costFeedReadState.value))
+const hasRetainedCostRead = computed(() => ['retained', 'retained-expired'].includes(costFeedReadState.value))
+const hasHostingerReadFailure = computed(() => ['unavailable', 'expired'].includes(hostingerReadState.value))
+const hasRetainedHostingerRead = computed(() => ['retained', 'retained-expired'].includes(hostingerReadState.value))
+const costReadMessage = computed(() => costFeedReadState.value === 'expired' ? 'Your session expired. Sign in again to load saved billing observations.' : 'Saved billing observations could not be loaded. No current result is confirmed.')
+const hostingerReadMessage = computed(() => hostingerReadState.value === 'expired' ? 'Your session expired. Sign in again to load Hostinger services.' : 'Hostinger services could not be loaded. No current provider result is confirmed.')
+const overviewFreshness = computed(() => {
+  if (connectionReadState.value === 'pending') return 'Checking saved provider connections'
+  if (['unavailable', 'expired'].includes(connectionReadState.value) && !connectionStatuses.value) return 'Provider connection status unavailable'
+  if (lastSuccessfulSync.value) return `Latest successful data · ${dateLabel(lastSuccessfulSync.value.slice(0, 10))}`
+  if (hasConfiguredProvider.value) return 'Waiting for first billing data'
+  return connectionStatuses.value ? 'No billing connections yet' : 'Provider connection status not confirmed'
+})
+const overviewEmptyMessage = computed(() => {
+  if (costFeedReadState.value === 'pending') return 'Checking saved billing observations before confirming an empty spending summary.'
+  if (hasCostReadFailure.value) return 'Billing observations are unavailable until the saved data read succeeds.'
+  if (hasRetainedCostRead.value) return `No spending data was present in the last successful read${readTime(costFeedReadAt.value) ? ` from ${readTime(costFeedReadAt.value)}` : ''}; the latest check failed.`
+  if (connectionReadState.value === 'pending') return 'Checking provider connections before confirming an empty spending summary.'
+  if (connectionStatusesError.value && !connectionStatuses.value) return 'Provider connection status is unavailable; a zero summary cannot be confirmed.'
+  return 'No spending data has arrived yet.'
+})
 const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
 function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
@@ -378,10 +454,10 @@ function downloadSubscriptions() {
 async function reloadFinancialViews() {
   await Promise.allSettled([reloadLedger(), refreshPersistedFinancialData(true)])
 }
-function setConnectionStatuses(statuses: ConnectionStatuses) { financialReadRevision++; connectionStatuses.value = statuses; connectionStatusesError.value = false }
+function setConnectionStatuses(statuses: ConnectionStatuses) { financialReadRevision++; connectionStatuses.value = statuses; connectionStatusesError.value = false; connectionReadState.value = successfulReadState(true); connectionReadAt.value = new Date().toISOString() }
 function applyCostFeed(feed: typeof costFeed.value) { costFeed.value = feed }
-function setCostFeed(feed: typeof costFeed.value) { financialReadRevision++; applyCostFeed(feed) }
-function setHostingerState(state: HostingerState) { financialReadRevision++; hostingerState.value = state }
+function setCostFeed(feed: typeof costFeed.value) { financialReadRevision++; applyCostFeed(feed); costFeedReadState.value = successfulReadState(feed.snapshots.length > 0); costFeedReadAt.value = new Date().toISOString(); costFeedReadError.value = '' }
+function setHostingerState(state: HostingerState) { financialReadRevision++; hostingerState.value = state; hostingerReadState.value = successfulReadState(state.subscriptions.length > 0); hostingerReadAt.value = new Date().toISOString(); hostingerReadError.value = '' }
 
 </script>
 
@@ -398,13 +474,17 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       <header class="page-header"><div><p class="eyebrow">{{ sectionMeta.eyebrow }}</p><h1>{{ sectionMeta.title }}<span class="heading-period">.</span></h1><p class="muted">{{ sectionMeta.subtitle }}</p><form action="/auth/logout" method="post"><button class="text-button" type="submit">Sign out</button></form></div><div class="header-actions"><NuxtLink v-if="currentSection !== 'connections'" class="primary-button" :to="currentSection === 'overview' && hasConfiguredProvider ? '/services' : '/connections'">{{ currentSection === 'overview' && hasConfiguredProvider ? 'View services' : hasConfiguredProvider ? 'Manage connections' : 'Connect a provider' }}</NuxtLink><NuxtLink v-if="currentSection === 'overview' && hasConfiguredProvider" class="secondary-button" to="/connections">Manage connections</NuxtLink><button v-if="currentSection === 'services' || currentSection === 'overview'" class="secondary-button" :disabled="blocked" @click="openForm()">Add manually</button></div></header>
       <div v-if="storageError" class="error-message storage-error" role="alert">{{ storageError }} <button class="text-button" type="button" :disabled="loading || busy" @click="reloadLedger">Reload subscriptions</button><a v-if="storageError.includes('session expired')" href="/login">Sign in</a></div>
       <p v-if="financialRefreshError" class="feed-warning financial-refresh-warning" role="alert">{{ financialRefreshError }} <button class="text-button" type="button" :disabled="!!financialRefresh" @click="refreshPersistedFinancialData(true)">Try again</button></p>
-      <p v-if="connectionStatusesError" class="feed-warning" role="status">Connection status could not be checked. Last known billing data remains visible.</p>
+      <p v-if="hasCostReadFailure" class="error-message" role="alert">{{ costReadMessage }} <button class="text-button" type="button" :disabled="!!financialRefresh" @click="refreshPersistedFinancialData(true)">Try again</button><a v-if="costFeedReadState === 'expired' || costFeedReadState === 'retained-expired'" href="/login">Sign in</a></p>
+      <p v-else-if="hasRetainedCostRead" class="feed-warning" role="status">The latest billing data check failed. Showing observations from the last successful read{{ readTime(costFeedReadAt) ? ` on ${readTime(costFeedReadAt)}` : '' }}. <button class="text-button" type="button" :disabled="!!financialRefresh" @click="refreshPersistedFinancialData(true)">Try again</button><a v-if="costFeedReadState === 'retained-expired'" href="/login">Sign in</a></p>
+      <p v-if="hasHostingerReadFailure" class="error-message" role="alert">{{ hostingerReadMessage }} <button class="text-button" type="button" :disabled="!!financialRefresh" @click="refreshPersistedFinancialData(true)">Try again</button><a v-if="hostingerReadState === 'expired' || hostingerReadState === 'retained-expired'" href="/login">Sign in</a></p>
+      <p v-else-if="hasRetainedHostingerRead" class="feed-warning" role="status">The latest Hostinger data check failed. Showing saved service details from the last successful read{{ readTime(hostingerReadAt) ? ` on ${readTime(hostingerReadAt)}` : '' }}.</p>
+      <p v-if="connectionStatusesError" class="feed-warning" role="status">Connection status could not be checked. {{ connectionStatuses ? `Showing the last successful status read${readTime(connectionReadAt) ? ` from ${readTime(connectionReadAt)}` : ''}.` : 'Saved provider access has not been confirmed.' }} <button class="text-button" type="button" :disabled="!!financialRefresh" @click="refreshPersistedFinancialData(true)">Try again</button><a v-if="connectionReadState === 'expired' || connectionReadState === 'retained-expired'" href="/login">Sign in</a></p>
       <template v-if="currentSection === 'overview'">
       <p v-if="loading" role="status">Loading your subscriptions…</p>
       <p v-else-if="busy" role="status">Saving your subscriptions…</p>
       <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
       <section v-if="loaded" class="tracked-spending overview-snapshot" aria-labelledby="tracked-spending-title">
-        <div class="overview-section-heading"><div><p class="eyebrow">Your spending</p><h2 id="tracked-spending-title">Fixed and metered spending</h2></div><p v-if="lastSuccessfulSync" class="overview-freshness">Latest successful data · {{ dateLabel(lastSuccessfulSync.slice(0, 10)) }}</p><p v-else class="overview-freshness">{{ hasConfiguredProvider ? 'Waiting for first billing data' : 'No billing connections yet' }}</p></div>
+        <div class="overview-section-heading"><div><p class="eyebrow">Your spending</p><h2 id="tracked-spending-title">Fixed and metered spending</h2></div><p class="overview-freshness">{{ overviewFreshness }}</p></div>
         <p v-if="meteredWarning" class="feed-warning" role="status">{{ meteredWarning }}</p>
         <div v-if="trackedTotals.length" class="tracked-spending-grid">
           <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card overview-currency-card">
@@ -414,11 +494,15 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
           </article>
         </div>
         <p v-if="hostingerCoverageWarning" class="feed-warning hostinger-coverage-warning" role="status">{{ hostingerCoverageWarning }} <NuxtLink to="/services#hostinger-discovery">Review Hostinger services</NuxtLink></p>
-        <div v-if="!trackedTotals.length" class="overview-empty"><p>No spending data has arrived yet.</p><p>Connect a provider or add a fixed service to get started.</p><NuxtLink class="text-button" to="/services">Add a fixed service</NuxtLink></div>
+        <div v-if="!trackedTotals.length" class="overview-empty"><p>{{ overviewEmptyMessage }}</p><p v-if="!['pending', 'unavailable', 'expired'].includes(costFeedReadState) && !['pending', 'unavailable', 'expired'].includes(connectionReadState)">Connect a provider or add a fixed service to get started.</p><NuxtLink class="text-button" to="/services">Add a fixed service</NuxtLink></div>
       </section>
       <section v-if="loaded" class="overview-next-charges" aria-labelledby="next-charges-title">
         <div class="overview-section-heading"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="next-charges-title">Coming up next</h2></div><div class="overview-section-links"><NuxtLink class="text-button" to="/history#payment-schedule">Full payment schedule</NuxtLink><NuxtLink class="text-button" to="/services">Manage services</NuxtLink></div></div>
+        <p v-if="paymentScheduleReadState === 'pending'" class="metric-note" role="status">Checking saved subscriptions and provider coverage; any listed renewals are known saved commitments.</p>
+        <p v-else-if="['unavailable', 'expired'].includes(paymentScheduleReadState)" class="metric-note" role="status">Provider or subscription data is unavailable; any listed renewals are known saved commitments and the full schedule is unconfirmed.</p>
         <ul v-if="upcomingCharges.length" class="overview-renewal-list"><li v-for="charge in upcomingCharges" :key="`${charge.subscription.id}-${charge.date}`"><button class="overview-renewal-name service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: charge.subscription.id }, $event)">{{ charge.subscription.name }}<span>{{ charge.subscription.provider || 'Fixed subscription' }}</span></button><span class="overview-renewal-date">{{ dateLabel(charge.date) }}</span><strong class="overview-renewal-amount">{{ money(charge.amount, charge.currency) }}</strong></li></ul>
+        <p v-else-if="paymentScheduleReadState === 'pending'" class="quiet-empty" role="status">The upcoming schedule is still loading.</p>
+        <p v-else-if="['unavailable', 'expired'].includes(paymentScheduleReadState)" class="quiet-empty" role="status">Upcoming renewals could not be fully confirmed because saved subscription or provider data is unavailable.</p>
         <p v-else class="quiet-empty">No active renewal is scheduled in the next year.</p>
         <p v-if="hostingerCoverageWarning" class="feed-warning hostinger-coverage-warning" role="status">{{ hostingerCoverageWarning }} <NuxtLink to="/services#hostinger-discovery">Review Hostinger services</NuxtLink></p>
       </section>
@@ -437,7 +521,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
             <template v-if="providerUsage[provider].length">
               <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>{{ provider === 'openai' ? 'Organization API costs reported' : 'Provider-reported usage' }} · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month estimate</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : 'Unavailable' }}</dd></div><div><dt>Source period</dt><dd>{{ periodDescription(provider, usage.currency) }}</dd></div></dl>
             </template>
-            <p v-else class="metric-note">{{ !providerIsConfigured(provider) ? 'Not connected' : costFeed.providers[provider].status === 'synced' ? 'Checked successfully; no current billing data was returned.' : 'Credentials saved; waiting for the first successful billing sync.' }}</p>
+            <p v-else class="metric-note">{{ providerConnectionNote(provider) }}</p>
             <p v-if="costFeed.providers[provider].status === 'error'" class="feed-warning" role="status">Sync failed; last known charges remain visible.</p>
             <p v-else-if="isProviderStale(costFeed.providers[provider])" class="feed-warning" role="status">Last known charges are stale.</p>
             <p v-if="costFeed.providers[provider].lastSyncedAt" class="metric-note">{{ costFeed.providers[provider].status === 'error' ? 'Last successful data · ' : 'Last successful sync · ' }}{{ new Date(costFeed.providers[provider].lastSyncedAt!).toLocaleString() }}</p>
@@ -445,12 +529,12 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
           <article class="provider-overview-card">
             <h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider: 'digitalocean' }, $event)">DigitalOcean <span class="metric-note">Finalized invoice totals</span></button></h3>
             <template v-if="digitalOceanInvoices.length"><div v-for="invoice in digitalOceanInvoices.slice(0, 3)" :key="invoice.id" class="provider-overview-value">{{ money(invoice.amount, invoice.currency) }} <span>· {{ invoice.periodStart.slice(0, 7) }} invoice period</span></div><p class="metric-note">Previews, balances, nightly usage estimates, payments, and credit events are excluded.</p></template>
-            <p v-else class="metric-note">{{ providerIsConfigured('digitalocean') ? 'Connected; finalized invoices are not available yet.' : 'Not connected' }}</p>
+            <p v-else class="metric-note">{{ providerConnectionNote('digitalocean').replace('billing data', 'finalized invoices') }}</p>
           </article>
           <article class="provider-overview-card">
             <h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider: 'hostinger' }, $event)">Hostinger <span class="metric-note">Fixed recurring commitments</span></button></h3>
             <div v-for="total in hostingerFixedTotals" :key="total.currency" class="provider-overview-value">{{ money(total.monthly, total.currency) }} <span>/ mo equivalent</span></div>
-            <p v-if="!hostingerFixedTotals.length" class="metric-note">{{ hostingerIsConfigured() ? 'Connected; eligible renewals appear after sync.' : 'Not connected' }}</p>
+            <p v-if="!hostingerFixedTotals.length" class="metric-note">{{ hostingerReadState === 'pending' ? 'Checking saved Hostinger services…' : hostingerReadState === 'unavailable' || hostingerReadState === 'expired' ? 'Hostinger services unavailable; retry the data check.' : hostingerIsConfigured() ? 'Connected; eligible renewals appear after sync.' : connectionReadState === 'pending' ? 'Checking saved connection status…' : 'Not connected' }}</p>
             <p v-else class="metric-note">Included in fixed commitments and upcoming renewals.</p>
           </article>
           <article class="provider-overview-card">
@@ -466,18 +550,21 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       </template>
       <section v-if="currentSection === 'services'" id="services" class="services-screen">
       <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><NuxtLink class="text-button" to="/history#payment-schedule">Payment schedule</NuxtLink><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>
+        <p v-if="subscriptionsReadState === 'pending'" role="status">Checking saved subscriptions…</p>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
         <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No manual subscriptions yet</h3><p>Connect a provider above to sync your costs, or add services such as Bitwarden Premium and ChatGPT Plus yourself.</p></div>
         <div v-else-if="subscriptions.length" class="table-scroll" role="region" tabindex="0" aria-label="Subscriptions table. Scroll horizontally to view all columns."><p class="table-scroll-hint" aria-hidden="true">Scroll horizontally to view all columns</p><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: item.id }, $event)"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></button></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
       </section>
       <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
+      <p v-if="currentSection === 'services' && !hostingerStateResolved" role="status">Checking saved Hostinger services…</p>
       <KeepAlive><HostingerDiscovery v-if="currentSection === 'services' && hostingerStateResolved" :initial="hostingerState" :ledger="subscriptions" @changed="reloadLedger" @loaded="setHostingerState" /></KeepAlive>
-      <KeepAlive><InfrastructurePanel v-if="currentSection === 'services' && costFeedResolved && hostingerStateResolved" :initial-feed="costFeed" :fixed-totals="totals" :today="today" :configured-providers="connectedBillingProviders" @details="openProviderDetails($event)" /></KeepAlive>
+      <KeepAlive><InfrastructurePanel v-if="currentSection === 'services' && connectionStatusesResolved" :initial-feed="costFeed" :fixed-totals="totals" :today="today" :configured-providers="connectedBillingProviders" :feed-read-state="costFeedReadState" :feed-read-at="costFeedReadAt" @details="openProviderDetails($event)" /></KeepAlive>
       </section>
+      <p v-if="currentSection === 'connections' && !connectionStatusesResolved" role="status">Checking saved provider connections…</p>
       <KeepAlive><ConnectionsPanel v-if="currentSection === 'connections' && connectionStatusesResolved" :initial-statuses="connectionStatuses" :cost-feed="costFeed" :hostinger="hostingerState" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" /></KeepAlive>
       <section v-if="currentSection === 'history'" class="history-screen">
-        <div class="content-columns single-column"><SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" :hostinger-coverage-warning="hostingerCoverageWarning" @select="openServiceDetails($event)" /></div>
-        <CostHistory :snapshots="costFeed.snapshots" />
+        <div class="content-columns single-column"><SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" :hostinger-coverage-warning="hostingerCoverageWarning" :subscriptions-state="paymentScheduleReadState" :subscriptions-read-at="subscriptionsReadAt" :cost-feed-state="costFeedReadState" :cost-feed-read-at="costFeedReadAt" @select="openServiceDetails($event)" /></div>
+        <CostHistory :snapshots="costFeed.snapshots" :read-state="costFeedReadState" :last-read-at="costFeedReadAt" />
       </section>
       <footer class="app-footer"><span>StackDues</span><p>Fixed subscriptions are saved privately to your account. Existing browser data remains untouched.</p></footer>
     </main>

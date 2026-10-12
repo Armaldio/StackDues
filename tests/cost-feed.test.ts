@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, parseCostFeed } from '../src/lib/cost-feed.ts'
+import { CostFeedReadError, currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, parseCostFeed } from '../src/lib/cost-feed.ts'
 
 const snapshot = { id: 'a', provider: 'aws', periodStart: '2026-10-01', periodEnd: '2026-11-01', kind: 'actual', amount: 4, currency: 'USD', capturedAt: '2026-10-07T12:00:00Z', metadata: { period: 'current', breakdown: [{ service: 'EC2', amount: 4, currency: 'USD' }] } }
 test('public cost feed validates observations and removes unrecognized fields and raw errors', () => {
@@ -14,6 +14,7 @@ test('invalid snapshots or statuses are rejected atomically', () => {
 })
 test('feed request failures remain failures, never zero cost data', async () => {
   await assert.rejects(fetchCostFeed('https://example.test/costs', async () => new Response('broken', { status: 500 })))
+  await assert.rejects(fetchCostFeed('https://example.test/costs', async () => new Response('expired', { status: 401 })), error => error instanceof CostFeedReadError && error.status === 401)
   await assert.rejects(fetchCostFeed('https://example.test/costs', async () => new Response('{')))
   assert.deepEqual(await fetchCostFeed('https://example.test/costs', async () => Response.json(emptyCostFeed())), parseCostFeed(emptyCostFeed()))
 })

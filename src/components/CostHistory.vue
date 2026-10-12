@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { latestCostSnapshots, type CostProvider, type CostSnapshot } from '../domain/usage-costs'
+import type { DataReadState } from '../domain/data-read-state'
 
-const props = defineProps<{ snapshots: readonly CostSnapshot[] }>()
+const props = defineProps<{ snapshots: readonly CostSnapshot[]; readState: DataReadState; lastReadAt?: string }>()
 const providerFilter = ref<'all' | CostProvider>('all')
 const kindFilter = ref<'all' | CostSnapshot['kind']>('all')
 const currencyFilter = ref('all')
@@ -21,6 +22,7 @@ const observations = computed(() => {
 const visible = computed(() => observations.value.slice(0, visibleLimit.value))
 watch([providerFilter, kindFilter, currencyFilter, showPreviousCaptures], () => { visibleLimit.value = 30 })
 function captured(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
+function readTime() { return props.lastReadAt ? captured(props.lastReadAt) : '' }
 function money(amount: number, currency: string) { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) }
 function period(snapshot: CostSnapshot) {
   const label = snapshot.metadata?.scope === 'finalized-invoice-total' ? 'Finalized invoice'
@@ -37,10 +39,13 @@ function kind(snapshot: CostSnapshot) {
 </script>
 <template>
   <section id="history" class="cost-history" aria-labelledby="history-title">
-    <div class="section-header"><div><p class="eyebrow">Previously reported</p><h2 id="history-title">Cost history</h2></div><span class="muted">{{ snapshots.length }} saved observations</span></div>
+    <div class="section-header"><div><p class="eyebrow">Previously reported</p><h2 id="history-title">Cost history</h2></div><span class="muted" aria-live="polite">{{ props.readState === 'pending' ? 'Checking saved observations…' : ['unavailable', 'expired'].includes(props.readState) ? 'Saved observations unavailable' : `${snapshots.length} saved observations` }}</span></div>
     <p class="history-note">Repeated captures for the same provider, period, type, and currency are revisions. The latest is shown by default. These observations are not separate payments.</p>
     <p class="history-note">Capture history begins when a provider first syncs; coverage depends on the periods that provider reports. This is not a complete invoice ledger.</p>
-    <div v-if="!snapshots.length" class="quiet-empty"><h3>No cost history yet</h3><p>Connect a provider to see reported spend over time.</p></div>
+    <p v-if="props.readState === 'retained' || props.readState === 'retained-expired'" class="history-note" role="status">The latest history check failed; showing the last successful read{{ readTime() ? ` from ${readTime()}` : '' }}.</p>
+    <div v-if="props.readState === 'pending'" class="quiet-empty" role="status"><h3>Checking cost history</h3><p>Saved provider observations are not confirmed until this check finishes.</p></div>
+    <div v-else-if="['unavailable', 'expired'].includes(props.readState)" class="quiet-empty" role="alert"><h3>Cost history unavailable</h3><p>{{ props.readState === 'expired' ? 'Your session expired. Sign in again to load saved provider observations.' : 'The saved observations could not be loaded. Try again from the status message above.' }}</p></div>
+    <div v-else-if="!snapshots.length" class="quiet-empty"><h3>{{ props.readState === 'retained' || props.readState === 'retained-expired' ? 'No observations in the last successful read' : 'No cost history yet' }}</h3><p>Connect a provider to see reported spend over time.</p></div>
     <template v-else>
       <div class="history-controls" role="group" aria-label="Filter cost history">
         <label>Provider<select v-model="providerFilter"><option value="all">All providers</option><option value="aws">AWS</option><option value="cloudflare">Cloudflare</option><option value="openai">OpenAI API</option><option value="digitalocean">DigitalOcean</option></select></label>

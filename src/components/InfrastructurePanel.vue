@@ -3,8 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { latestCostSnapshots, normalizeUsageAmount, trackedSpendingTotals, usageTotals, type CostBreakdown, type CostProvider, type CostSnapshot } from '../domain/usage-costs'
 import type { CurrencyTotal } from '../domain/subscriptions'
 import { currentCostSnapshots, isProviderStale, type CostFeed } from '../lib/cost-feed'
+import type { DataReadState } from '../domain/data-read-state'
 
-const props = defineProps<{ fixedTotals: CurrencyTotal[]; today: string; initialFeed: CostFeed; configuredProviders: readonly CostProvider[] }>()
+const props = defineProps<{ fixedTotals: CurrencyTotal[]; today: string; initialFeed: CostFeed; configuredProviders: readonly CostProvider[]; feedReadState: DataReadState; feedReadAt?: string }>()
 const emit = defineEmits<{ details: [provider: CostProvider] }>()
 const feed = ref(props.initialFeed)
 const providers: CostProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean']
@@ -17,7 +18,24 @@ const forecastProviders = computed(() => connectedProviders.value.filter(provide
 const combined = computed(() => trackedSpendingTotals(props.fixedTotals, totals.value, forecastProviders.value, activeSnapshots.value))
 function money(amount: number, currency: string) { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount) }
 function date(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
+function lastRead() { return props.feedReadAt ? date(props.feedReadAt) : '' }
 function name(provider: CostProvider) { return provider === 'aws' ? 'Amazon Web Services' : provider === 'cloudflare' ? 'Cloudflare' : provider === 'openai' ? 'OpenAI API' : 'DigitalOcean' }
+function providerStatus(provider: CostProvider) {
+  if (props.feedReadState === 'pending') return 'Checking data'
+  if (props.feedReadState === 'unavailable' || props.feedReadState === 'expired') return 'Unavailable'
+  if (props.feedReadState === 'retained' || props.feedReadState === 'retained-expired') return 'Last loaded'
+  if (!props.configuredProviders.includes(provider)) return 'Not connected'
+  return feed.value.providers[provider].status === 'error' ? 'Sync failed' : 'Connected'
+}
+function emptyMessage(provider: CostProvider) {
+  if (props.feedReadState === 'pending') return 'Checking for saved provider observations…'
+  if (props.feedReadState === 'unavailable') return 'Billing observations could not be loaded. See the status message above to retry.'
+  if (props.feedReadState === 'expired' || props.feedReadState === 'retained-expired') return 'Your session expired. Sign in again to load current billing observations.'
+  if (!props.configuredProviders.includes(provider)) return 'Connect your account to see reported usage costs here.'
+  if (feed.value.providers[provider].status === 'error') return 'Usage is unavailable; see the sync warning above.'
+  if (props.feedReadState === 'retained') return 'No observations were present in the last successful read; the latest refresh failed.'
+  return 'No provider usage report is available yet.'
+}
 function current(provider: CostProvider): CostSnapshot[] {
   const rows = latest.value.filter(row => row.provider === provider)
   const newest = Math.max(...rows.map(row => Date.parse(row.capturedAt)))
@@ -57,6 +75,9 @@ watch(() => props.initialFeed, next => { feed.value = next })
   <section id="infrastructure" class="infrastructure-section" aria-labelledby="infra-heading">
     <div class="section-header"><div><p class="eyebrow">Metered usage</p><h2 id="infra-heading">Infrastructure</h2></div></div>
     <p class="section-description">Reported provider spend stays separate from your fixed commitments. Forecasts include actual spend; they are never added to it. Disconnected providers are excluded from tracked totals.</p>
+    <p v-if="props.feedReadState === 'pending'" class="metric-note" role="status">Checking saved billing observations…</p>
+    <p v-else-if="props.feedReadState === 'unavailable' || props.feedReadState === 'expired'" class="feed-warning" role="alert">{{ props.feedReadState === 'expired' ? 'Your session expired; billing observations could not be loaded.' : 'Billing observations could not be loaded.' }} The displayed provider amounts are unavailable.</p>
+    <p v-else-if="props.feedReadState === 'retained' || props.feedReadState === 'retained-expired'" class="feed-warning" role="status">The latest billing data read failed. Showing saved observations from the last successful read{{ lastRead() ? ` on ${lastRead()}` : '' }}.</p>
     <div v-if="totals.length" class="usage-summary">
       <div v-for="total in combined" :key="total.currency" class="usage-total">
         <p class="eyebrow">{{ total.currency }} · provider-reported period</p><strong>{{ total.meteredActual === null ? 'Unavailable' : money(total.meteredActual, total.currency) }}</strong><span>Provider-reported usage</span>
@@ -70,7 +91,7 @@ watch(() => props.initialFeed, next => { feed.value = next })
     </div>
     <div class="provider-grid">
       <article v-for="provider in providers" :key="provider" class="provider-panel">
-        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ name(provider) }}</button></h3></div><span class="status-label" :class="!configuredProviders.includes(provider) ? 'not-configured' : feed.providers[provider].status">{{ !configuredProviders.includes(provider) ? 'Not connected' : feed.providers[provider].status === 'error' ? 'Sync failed' : 'Connected' }}</span></header>
+        <header><div><span class="provider-mark" aria-hidden="true">{{ provider === 'aws' ? 'a' : provider === 'cloudflare' ? 'c' : 'o' }}</span><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ name(provider) }}</button></h3></div><span class="status-label" :class="props.feedReadState === 'pending' ? 'pending' : ['unavailable', 'expired'].includes(props.feedReadState) ? 'error' : !configuredProviders.includes(provider) ? 'not-configured' : feed.providers[provider].status">{{ providerStatus(provider) }}</span></header>
         <p v-if="feed.providers[provider].error" class="feed-warning" role="status">{{ feed.providers[provider].error }}</p>
         <p v-if="isProviderStale(feed.providers[provider])" class="feed-warning">Data is over 36 hours old. The last successful observations are retained.</p>
         <template v-if="current(provider).length">
@@ -85,7 +106,7 @@ watch(() => props.initialFeed, next => { feed.value = next })
             <dl v-if="breakdown(snapshot.metadata?.breakdown).length" class="service-breakdown"><div v-for="service in breakdown(snapshot.metadata?.breakdown)" :key="service.service"><dt>{{ service.service }}</dt><dd>{{ money(service.amount, service.currency) }}</dd></div></dl>
           </div>
         </template>
-        <p v-else class="provider-empty">{{ !configuredProviders.includes(provider) ? 'Connect your account to see reported usage costs here.' : feed.providers[provider].status === 'error' ? 'Usage is unavailable; see the sync warning above.' : 'No provider usage report is available yet.' }}</p>
+        <p v-else class="provider-empty" :role="['pending', 'unavailable', 'expired'].includes(props.feedReadState) ? 'status' : undefined">{{ emptyMessage(provider) }}</p>
         <footer><span v-if="feed.providers[provider].lastSyncedAt">Last synced {{ date(feed.providers[provider].lastSyncedAt!) }}</span><span v-else>No successful sync yet</span><span v-if="feed.providers[provider].lastAttemptAt && feed.providers[provider].status === 'error'">Last attempted {{ date(feed.providers[provider].lastAttemptAt!) }}</span></footer>
       </article>
     </div>
