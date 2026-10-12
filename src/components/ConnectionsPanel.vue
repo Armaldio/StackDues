@@ -23,6 +23,13 @@ const permissions: Record<ConnectionProvider, string> = {
   openai: 'Organization Admin API key with organization cost read access',
   digitalocean: 'Personal access token with billing:read permission',
 }
+const setupGuidance: Record<ConnectionProvider, { instruction: string; docs: string; docsLabel: string }> = {
+  aws: { instruction: 'Create a dedicated IAM principal for this connection. Grant only ce:GetCostAndUsage and ce:GetCostForecast; its access key can read cost usage and forecast data, not manage AWS resources.', docs: 'https://docs.aws.amazon.com/cost-management/latest/userguide/ce-api.html', docsLabel: 'AWS Cost Explorer API permissions' },
+  cloudflare: { instruction: 'In My Profile → API Tokens, create a custom token scoped to this account with Account → Billing → Read. Copy the account ID from the account dashboard.', docs: 'https://developers.cloudflare.com/billing/understand/billing-permissions/', docsLabel: 'Cloudflare billing permissions' },
+  hostinger: { instruction: 'Create an API token in Hostinger hPanel for the account whose subscriptions you want to track. Hostinger says tokens inherit their owner’s permissions and does not document a billing-read-only scope; its API also exposes renewal actions. Only use a token if the owner account’s permissions are acceptable. If your account roles can limit access, use a dedicated account; revoke the token when it is no longer needed.', docs: 'https://developers.hostinger.com/', docsLabel: 'Hostinger API reference' },
+  openai: { instruction: 'An organization Admin API key is required for organization costs; a standard project API key will not work. Admin keys can read organization administration data, so use a dedicated, expiring key and limit access to trusted organization administrators.', docs: 'https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs', docsLabel: 'OpenAI organization costs API' },
+  digitalocean: { instruction: 'Create a personal access token with the custom billing:read scope only. StackDues imports finalized monthly invoices in USD; previews, balances, and usage estimates are excluded.', docs: 'https://docs.digitalocean.com/platform/billing/reference/api/', docsLabel: 'DigitalOcean billing API and scopes' },
+}
 const plannedProviders = [
   { name: 'GitHub', coverage: 'Personal billing usage; currency and payer details are not exposed by the current API, so money totals are not available yet', setup: 'Enhanced billing access may be required' },
 ]
@@ -87,7 +94,7 @@ async function save(provider: ConnectionProvider) {
     const credentials = provider === 'aws' ? { accessKeyId: drafts.aws.accessKeyId.trim(), secretAccessKey: drafts.aws.secretAccessKey.trim(), ...(drafts.aws.sessionToken?.trim() ? { sessionToken: drafts.aws.sessionToken.trim() } : {}) } : provider === 'cloudflare' ? { accountId: drafts.cloudflare.accountId.trim(), apiToken: drafts.cloudflare.apiToken.trim() } : provider === 'hostinger' ? { apiToken: drafts.hostinger.apiToken.trim() } : provider === 'openai' ? { adminApiKey: drafts.openai.adminApiKey.trim() } : { apiToken: drafts.digitalocean.apiToken.trim() }
     statuses.value[provider] = await saveConnection(provider, credentials, statuses.value[provider].revision)
     const synced = await runSync(provider)
-    notice.value = synced ? `${names[provider]} connection saved and initial sync completed.` : `${names[provider]} connection saved, but its initial sync failed. Previous data is retained; retry below.`
+    notice.value = synced ? `${names[provider]} connection saved and initial sync completed.` : `${names[provider]} connection saved, but its initial sync failed. Previous data is retained; use Retry to try again.`
     emit('loaded', statuses.value)
     emit('changed')
   } catch (cause) { fail(cause) }
@@ -146,7 +153,8 @@ onUnmounted(() => providers.forEach(clear))
       <article v-for="provider in visibleProviders" :key="provider" class="connection-card">
         <header><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ names[provider] }}</button></h3><span class="status-pill">{{ connectionLabel(provider) }}</span></header>
         <p><strong>Data available:</strong> {{ coverage[provider] }}</p>
-        <p><strong>Setup and access:</strong> {{ permissions[provider] }}. {{ provider === 'hostinger' ? 'Review discovered renewals in Hostinger subscriptions below.' : '' }} <a v-if="provider === 'digitalocean'" href="https://docs.digitalocean.com/platform/billing/reference/api/" target="_blank" rel="noreferrer">DigitalOcean billing API documentation</a></p>
+        <p><strong>Access:</strong> {{ permissions[provider] }}</p>
+        <p class="connection-guidance">{{ setupGuidance[provider].instruction }} <a :href="setupGuidance[provider].docs" target="_blank" rel="noopener noreferrer">{{ setupGuidance[provider].docsLabel }}</a><template v-if="provider === 'hostinger'"> · <a href="/services#hostinger-discovery">Manage Hostinger renewals</a></template></p>
         <details class="connection-editor"><summary>{{ statuses?.[provider].configured ? 'Replace credentials' : 'Connect account' }}</summary>
           <form autocomplete="off" @submit.prevent="save(provider)"><fieldset :disabled="loading || !!busy || !statuses || !!error">
             <template v-if="provider === 'aws'"><label :for="`${provider}-key`">Access key ID<input :id="`${provider}-key`" v-model="drafts.aws.accessKeyId" type="password" autocomplete="off" required maxlength="256" /></label><label :for="`${provider}-secret`">Secret access key<input :id="`${provider}-secret`" v-model="drafts.aws.secretAccessKey" type="password" autocomplete="off" required maxlength="4096" /></label><label :for="`${provider}-session`">Session token (optional)<input :id="`${provider}-session`" v-model="drafts.aws.sessionToken" type="password" autocomplete="off" maxlength="4096" /></label></template>
@@ -161,8 +169,8 @@ onUnmounted(() => providers.forEach(clear))
         <p v-if="syncState[provider] === 'failed'" class="error-message" role="status">{{ syncError[provider] }}</p>
         <button v-if="statuses?.[provider].configured && hasSyncFailure(provider)" class="secondary-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Retrying…' : `Retry ${names[provider]} sync` }}</button>
         <details v-if="statuses?.[provider].configured && !hasSyncFailure(provider)" class="connection-sync-actions"><summary>Advanced sync actions</summary><button class="text-button" type="button" :disabled="loading || !!busy" @click="retrySync(provider)">{{ busy === provider ? 'Checking…' : 'Check for updates' }}</button></details>
-        <p v-if="syncState[provider] === 'synced'" class="connection-next-step">{{ provider === 'hostinger' ? 'Next: review eligible fixed renewals in Hostinger subscriptions below.' : 'Next: review current charges in Overview and Infrastructure.' }}</p>
-        <p v-else-if="statuses?.[provider].configured" class="connection-next-step">Next: review saved {{ provider === 'hostinger' ? 'renewals' : 'billing data' }} in Overview.</p>
+        <p v-if="syncState[provider] === 'synced'" class="connection-next-step"><template v-if="provider === 'hostinger'">Next: review eligible fixed renewals in <a href="/services#hostinger-discovery">Hostinger services</a>.</template><template v-else>Next: review provider data in Overview.</template></p>
+        <p v-else-if="statuses?.[provider].configured" class="connection-next-step">Next: review saved {{ provider === 'hostinger' ? 'renewals' : 'provider data' }} in Overview.</p>
         <p v-if="lastRefresh(provider)" class="metric-note">{{ refreshStatus(provider) === 'error' ? 'Last successful data · ' : 'Last billing sync · ' }}{{ formatTime(lastRefresh(provider)!) }}</p>
         <p v-if="!lastRefresh(provider) && refreshStatus(provider) === 'error'" class="metric-note">Last sync failed; previous data is retained.</p>
         <p v-if="lastAttempt(provider) && refreshStatus(provider) === 'error'" class="metric-note">Last sync attempt · {{ formatTime(lastAttempt(provider)!) }}</p>
