@@ -101,16 +101,18 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .overview-freshness { color: var(--muted); font-size: .75rem; }
 .overview-currency-card { padding: 1.1rem 1.25rem; border-top: 3px solid var(--accent); }
 .overview-currency { color: var(--muted); font-size: .72rem; font-weight: 600; letter-spacing: .12em; }
-.overview-spend-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin: .8rem 0 0; }
-.overview-spend-pair > div { min-width: 0; padding: .8rem; border: 1px solid var(--line); background: var(--bg); }
-.overview-spend-pair dt { min-height: 2.4em; color: var(--muted); font-size: .72rem; }
-.overview-spend-pair dd { margin: .3rem 0 0; font: 500 clamp(1.05rem, 2.2vw, 1.5rem)/1.25 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.overview-spend-pair small { display: block; margin-top: .4rem; color: var(--muted); font-size: .65rem; line-height: 1.4; }
+/* Overview values and explanations each need their own row. The shared
+   tracked-spending card rows use flex, so keep these overrides card-scoped. */
+.overview-currency-card .overview-spend-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; margin: .8rem 0 0; }
+.overview-currency-card .overview-spend-pair > div { display: block; min-width: 0; padding: .8rem; border: 1px solid var(--line); background: var(--bg); }
+.overview-spend-pair dt { color: var(--muted); font-size: .9rem; }
+.overview-currency-card .overview-spend-pair dd { margin: .4rem 0 0; text-align: left; font: 500 clamp(1.25rem, 2.2vw, 1.5rem)/1.3 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: normal; word-break: normal; }
+.overview-spend-pair small { display: block; margin-top: .5rem; color: var(--muted); font-size: .9rem; line-height: 1.5; }
 .overview-forecast { margin: .75rem 0 0; padding-top: .6rem; border-top: 1px solid var(--line); }
-.overview-forecast div { display: flex; justify-content: space-between; gap: .75rem; font-size: .74rem; }
+.overview-currency-card .overview-forecast div { display: block; font-size: .9rem; }
 .overview-forecast dt { color: var(--muted); }
-.overview-forecast dt span { font-size: .65rem; }
-.overview-forecast dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.overview-forecast dt span { font-size: .9rem; }
+.overview-currency-card .overview-forecast dd { margin: .4rem 0 0; text-align: left; font: 500 1.25rem/1.3 var(--mono); font-variant-numeric: tabular-nums; }
 .overview-empty { padding: 1.2rem; border: 1px dashed var(--line); background: var(--surface); }
 .overview-empty p + p { margin-top: .25rem; color: var(--muted); font-size: .8rem; }
 .overview-empty .text-button { display: inline-block; margin-top: .55rem; }
