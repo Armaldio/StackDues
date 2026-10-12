@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { hostingerCoverage, hostingerFreshness, hostingerRowStatus } from '../domain/hostinger-coverage'
 import type { StoredSubscription } from '../lib/subscription-api'
 import { addHostingerSubscription, HostingerApiError, linkHostingerSubscription, readHostingerDiscovery, setHostingerSubscriptionExcluded, syncHostinger, type HostingerDiscovery as Discovery } from '../lib/hostinger-api'
 
@@ -14,6 +15,10 @@ const expired = ref(false)
 const selected = ref<Record<string, string>>({})
 const modes = ref<Record<string, 'keep-current' | 'use-provider'>>({})
 let readVersion = 0
+const coverageWarning = computed(() => state.value ? hostingerCoverage(state.value, state.value.sync.status !== 'not-configured') : '')
+const freshness = computed(() => hostingerFreshness(state.value?.sync))
+function unconfirmed(item: Discovery['subscriptions'][number]) { return freshness.value !== 'current' || !item.seenInLatestSync }
+function timestamp(value: string) { return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) }
 const availableLedger = computed(() => props.ledger.filter(item => !state.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id)))
 const number = (amount: number | null, currency: string) => amount === null ? 'Price unavailable' : new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount)
 const period = (item: Discovery['subscriptions'][number]) => item.recurrenceInterval && item.recurrenceUnit && item.recurrenceUnit !== 'unsupported' ? `Every ${item.recurrenceInterval} ${item.recurrenceUnit}${item.recurrenceInterval === 1 ? '' : 's'}` : 'Billing period not supported'
@@ -87,11 +92,14 @@ watch(() => props.initial, next => { if (next) setState(next) })
     <p v-if="notice" class="connection-notice" role="status">{{ notice }}</p>
     <p v-if="state?.sync.status === 'error'" class="error-message" role="status">Last Hostinger refresh failed. Previously discovered services and linked subscriptions are retained. <button class="text-button" type="button" :disabled="loading || !!busyId" @click="refresh">{{ loading ? 'Retrying…' : 'Retry sync' }}</button></p>
     <p v-else-if="state?.sync.status === 'not-configured'" class="metric-note">Save a Hostinger API token in Connections before syncing services.</p>
+    <p v-if="state?.sync.lastSyncedAt" class="metric-note">Last successful Hostinger sync · {{ timestamp(state.sync.lastSyncedAt) }}{{ freshness === 'stale' ? ' · Stale (over 36 hours old)' : '' }}</p>
+    <p v-if="state?.sync.lastAttemptAt" class="metric-note">Latest Hostinger sync attempt · {{ timestamp(state.sync.lastAttemptAt) }}{{ freshness === 'failed' ? ' · Failed' : '' }}</p>
+    <p v-if="coverageWarning" class="feed-warning hostinger-coverage-warning" role="status">{{ coverageWarning }}</p>
     <div v-if="state?.subscriptions.length" class="hostinger-service-list">
       <article v-for="item in state.subscriptions" :key="item.externalId" class="hostinger-service-card">
-        <header><div><h3>{{ item.name }}</h3><p class="metric-note">{{ item.externalId }}</p></div><span class="status-pill">{{ item.excluded ? 'Excluded' : !item.seenInLatestSync ? 'Stale · absent from latest sync' : item.linkedSubscriptionId ? item.automaticallyLinked ? 'Tracked automatically' : 'Linked to manual subscription' : item.possibleMatches.length || item.providerNameCollision ? 'Needs review' : item.renewalAvailable ? 'Available to track' : 'Unsupported / not renewing' }}</span></header>
-        <dl class="hostinger-service-details"><div><dt>Upcoming renewal</dt><dd>{{ item.upcomingCommitment === null ? 'No future recurring charge' : number(item.upcomingCommitment, item.currency) }}</dd></div><div><dt>Billing cycle</dt><dd>{{ period(item) }}</dd></div><div><dt>Next billing date</dt><dd>{{ item.nextBillingAt?.slice(0, 10) ?? (item.expiresAt ? `Expires ${item.expiresAt.slice(0, 10)}` : 'Not reported') }}</dd></div><div><dt>First term total</dt><dd>{{ number(item.totalPrice, item.currency) }}</dd></div><div><dt>Origin</dt><dd>{{ item.automaticallyLinked ? 'Hostinger · tracked automatically' : item.linkedSubscriptionId ? 'Hostinger · linked to your subscription' : 'Hostinger account' }}</dd></div></dl>
-        <template v-if="item.linkedSubscriptionId"><p class="metric-note">{{ item.automaticallyLinked ? 'Tracked automatically and included once in fixed subscriptions and upcoming renewals.' : `Linked to ${props.ledger.find(row => row.id === item.linkedSubscriptionId)?.name ?? 'your existing subscription'}; that subscription remains the only ledger entry.` }} {{ item.seenInLatestSync ? 'Provider updates follow any values you changed manually.' : 'This service was absent from the latest successful sync; its displayed provider details are stale and the saved subscription was retained.' }}</p></template>
+        <header><div><h3>{{ item.name }}</h3><p class="metric-note">{{ item.externalId }}</p></div><span class="status-pill">{{ hostingerRowStatus(item, state.sync) }}</span></header>
+        <dl class="hostinger-service-details"><div><dt>{{ unconfirmed(item) ? 'Last known renewal' : 'Upcoming renewal' }}</dt><dd>{{ item.upcomingCommitment === null ? 'No confirmed recurring charge' : number(item.upcomingCommitment, item.currency) }}</dd></div><div><dt>Billing cycle</dt><dd>{{ period(item) }}</dd></div><div><dt>{{ unconfirmed(item) ? 'Last known billing date' : 'Next billing date' }}</dt><dd>{{ item.nextBillingAt?.slice(0, 10) ?? (item.expiresAt ? `Expires ${item.expiresAt.slice(0, 10)}` : 'Not reported') }}</dd></div><div><dt>First term total</dt><dd>{{ number(item.totalPrice, item.currency) }}</dd></div><div><dt>Origin</dt><dd>{{ item.automaticallyLinked ? 'Hostinger · tracked automatically' : item.linkedSubscriptionId ? 'Hostinger · linked to your subscription' : 'Hostinger account' }}</dd></div></dl>
+        <template v-if="item.linkedSubscriptionId"><p class="metric-note">{{ item.automaticallyLinked ? 'Tracked automatically and included once in saved fixed subscriptions.' : `Linked to ${props.ledger.find(row => row.id === item.linkedSubscriptionId)?.name ?? 'your existing subscription'}; that subscription remains the only ledger entry.` }} {{ state.sync.status === 'error' ? 'The latest sync failed; provider details are unconfirmed and linked Hostinger renewals are omitted from upcoming charges. Saved commitments are retained.' : !item.seenInLatestSync ? 'This service was absent from the latest successful sync; its displayed provider details are stale, its linked Hostinger renewal is omitted from upcoming charges, and the saved subscription was retained.' : freshness === 'stale' ? 'These are last known renewal details; refresh to confirm them. Saved commitments are retained.' : 'Provider updates follow any values you changed manually.' }}</p></template>
         <template v-else-if="item.excluded"><p class="metric-note">Excluded by you. It will stay out of automatic commitments.</p><button class="secondary-button" type="button" :disabled="loading || !!busyId" @click="setExcluded(item, false)">Include on next sync</button></template>
         <template v-else-if="item.renewalAvailable">
           <p v-if="item.providerNameCollision" class="metric-note">Other eligible Hostinger services share this name. Review or link them individually; none are included automatically.</p>
@@ -105,6 +113,6 @@ watch(() => props.initial, next => { if (next) setState(next) })
         <button v-if="!item.excluded && (item.renewalAvailable || item.linkedSubscriptionId)" class="text-button" type="button" :disabled="loading || !!busyId" @click="setExcluded(item, true)">Stop tracking this renewal</button>
       </article>
     </div>
-    <p v-else-if="!loading && !error && state?.sync.status !== 'not-configured'" class="quiet-empty">No Hostinger subscriptions were returned on the latest successful sync.</p>
+    <p v-else-if="!loading && !error && state?.sync.status === 'synced'" class="quiet-empty">No Hostinger subscriptions were returned on the latest successful sync.</p>
   </section>
 </template>

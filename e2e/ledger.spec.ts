@@ -1239,11 +1239,11 @@ test('stale Hostinger commitments remain visible but are omitted from upcoming c
   const source = { externalId: 'stale-vps', name: 'Stale VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 90, renewalPrice: 120, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: `${renewalDate}T00:00:00.000Z`, linkedSubscriptionId: subscription.id, automaticallyLinked: true, excluded: false, possibleMatches: [], providerNameCollision: false, seenInLatestSync: false, renewalAvailable: true, upcomingCommitment: 120 }
   await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [source], sync: { status: 'error', lastAttemptAt: new Date().toISOString(), lastSyncedAt: '2026-10-01T00:00:00Z' } } }))
   await page.goto('./services')
-  await expect(page.locator('#hostinger-discovery').getByText('Stale · absent from latest sync', { exact: true })).toBeVisible()
+  await expect(page.locator('#hostinger-discovery').getByText('Unconfirmed · last sync failed', { exact: true })).toBeVisible()
   await page.goto('./')
   await revealProviderDetails(page)
   await expect(page.locator('.provider-overview-card').filter({ has: page.getByRole('heading', { name: /Hostinger/ }) })).toContainText('USD 10.00')
-  await expect(page.locator('.overview-next-charges')).toContainText('renewal dates need confirmation and are omitted here')
+  await expect(page.locator('.overview-next-charges')).toContainText('linked Hostinger renewals cannot be confirmed and are omitted from upcoming charges')
   await page.goto('./history')
   const renewalLane = page.locator('#timeline .timeline-lane').first()
   await expect(renewalLane).toContainText('No active renewal is scheduled in the next 30 days')
@@ -1255,7 +1255,7 @@ test('Hostinger renewal discovery stays out of totals until linked or added and 
   await mockLedger(page, [legacy])
   let linked = false, added = false
   const source = { externalId: 'provider-kvm-1', name: 'Existing VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 89.99, renewalPrice: 179.99, isAutoRenewed: true, createdAt: '2025-10-08T11:54:22.000Z', expiresAt: null, nextBillingAt: '2026-10-08T11:54:22.000Z', linkedSubscriptionId: null, automaticallyLinked: false, excluded: false, possibleMatches: [{ id: legacy.id, name: legacy.name }], seenInLatestSync: true, renewalAvailable: true, upcomingCommitment: 179.99 }
-  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [{ ...source, linkedSubscriptionId: linked ? legacy.id : added ? 'new-entry' : null }], sync: { status: 'synced', lastSyncedAt: '2026-10-08T12:00:00Z' } } }))
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [{ ...source, linkedSubscriptionId: linked ? legacy.id : added ? 'new-entry' : null }], sync: { status: 'synced', lastSyncedAt: new Date().toISOString() } } }))
   await page.route('**/api/hostinger/subscriptions/provider-kvm-1/link', async route => {
     expect(route.request().postDataJSON()).toEqual({ subscriptionId: legacy.id, revision: 1, mode: 'keep-current' }); linked = true
     return route.fulfill({ json: { ...legacy, provider: 'Hostinger', revision: 2 } })
@@ -1264,7 +1264,7 @@ test('Hostinger renewal discovery stays out of totals until linked or added and 
   await page.goto('./services')
   const panel = page.locator('#hostinger-discovery')
   await expect(panel.getByText('USD 179.99', { exact: true })).toBeVisible()
-  await expect(panel.getByText('Needs review', { exact: true })).toBeVisible()
+  await expect(panel.getByText('Unconfirmed · needs review', { exact: true })).toBeVisible()
   await expect(panel.getByRole('button', { name: 'Add as a commitment' })).toHaveCount(0)
   await panel.getByText('Link an existing subscription').click()
   await panel.getByLabel('Subscription to link').selectOption(legacy.id)

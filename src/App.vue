@@ -13,6 +13,7 @@ import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTo
 import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
+import { hostingerCoverage } from './domain/hostinger-coverage'
 import { fetchConnections, type ConnectionStatuses } from './lib/connection-api'
 import { readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
@@ -218,7 +219,7 @@ const meteredWarning = computed(() => {
 function endDate(days: number) { const date = new Date(`${today.value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days - 1); return date.toISOString().slice(0, 10) }
 const currentHostingerLedger = computed(() => new Set((hostingerState.value?.subscriptions ?? []).filter(item => item.seenInLatestSync && hostingerState.value?.sync.status === 'synced').map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
 const confirmedSubscriptions = computed(() => subscriptions.value.filter(item => item.provider !== 'Hostinger' || !hostingerState.value?.subscriptions.some(source => source.linkedSubscriptionId === item.id) || currentHostingerLedger.value.has(item.id)))
-const hasStaleHostinger = computed(() => !!hostingerState.value?.subscriptions.some(item => item.linkedSubscriptionId && !item.seenInLatestSync))
+const hostingerCoverageWarning = computed(() => hostingerStateResolved.value ? hostingerCoverage(hostingerState.value, hostingerIsConfigured()) : '')
 const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
 function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
@@ -340,13 +341,14 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
             <dl v-if="total.meteredForecast !== null" class="overview-forecast"><div><dt>Full-month estimate</dt><dd>{{ money(total.meteredForecast, total.currency) }}</dd></div></dl>
           </article>
         </div>
-        <div v-else class="overview-empty"><p>No spending data has arrived yet.</p><p>Connect a provider or add a fixed service to get started.</p><NuxtLink class="text-button" to="/services">Add a fixed service</NuxtLink></div>
+        <p v-if="hostingerCoverageWarning" class="feed-warning hostinger-coverage-warning" role="status">{{ hostingerCoverageWarning }} <NuxtLink to="/services#hostinger-discovery">Review Hostinger services</NuxtLink></p>
+        <div v-if="!trackedTotals.length" class="overview-empty"><p>No spending data has arrived yet.</p><p>Connect a provider or add a fixed service to get started.</p><NuxtLink class="text-button" to="/services">Add a fixed service</NuxtLink></div>
       </section>
       <section v-if="loaded" class="overview-next-charges" aria-labelledby="next-charges-title">
         <div class="overview-section-heading"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="next-charges-title">Coming up next</h2></div><div class="overview-section-links"><NuxtLink class="text-button" to="/history#timeline">Full payment schedule</NuxtLink><NuxtLink class="text-button" to="/services">Manage services</NuxtLink></div></div>
         <ul v-if="upcomingCharges.length" class="overview-renewal-list"><li v-for="charge in upcomingCharges" :key="`${charge.subscription.id}-${charge.date}`"><button class="overview-renewal-name service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: charge.subscription.id }, $event)">{{ charge.subscription.name }}<span>{{ charge.subscription.provider || 'Fixed subscription' }}</span></button><span class="overview-renewal-date">{{ dateLabel(charge.date) }}</span><strong class="overview-renewal-amount">{{ money(charge.amount, charge.currency) }}</strong></li></ul>
         <p v-else class="quiet-empty">No active renewal is scheduled in the next year.</p>
-        <p v-if="hasStaleHostinger" class="feed-warning" role="status">Some Hostinger renewal dates need confirmation and are omitted here. <NuxtLink to="/services">Review Hostinger services</NuxtLink></p>
+        <p v-if="hostingerCoverageWarning" class="feed-warning hostinger-coverage-warning" role="status">{{ hostingerCoverageWarning }} <NuxtLink to="/services#hostinger-discovery">Review Hostinger services</NuxtLink></p>
       </section>
       <section v-if="loaded" class="spending-insights overview-featured-insight" aria-labelledby="spending-insights-title">
         <div class="overview-section-heading"><div><p class="eyebrow">Where metered costs go</p><h2 id="spending-insights-title">Cost drivers</h2></div><NuxtLink class="text-button" to="/history">View history</NuxtLink></div>
@@ -402,7 +404,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       </section>
       <KeepAlive><ConnectionsPanel v-if="currentSection === 'connections' && connectionStatusesResolved" :initial-statuses="connectionStatuses" :cost-feed="costFeed" :hostinger="hostingerState" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" /></KeepAlive>
       <section v-if="currentSection === 'history'" class="history-screen">
-        <div class="content-columns single-column"><SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" :stale-hostinger="hasStaleHostinger" @select="openServiceDetails($event)" /></div>
+        <div class="content-columns single-column"><SpendingTimeline :subscriptions="confirmedSubscriptions" :snapshots="costFeed.snapshots" :today="today" :hostinger-coverage-warning="hostingerCoverageWarning" @select="openServiceDetails($event)" /></div>
         <CostHistory :snapshots="costFeed.snapshots" />
       </section>
       <footer class="app-footer"><span>StackDues</span><p>Fixed subscriptions are saved privately to your account. Existing browser data remains untouched.</p></footer>

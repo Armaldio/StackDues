@@ -6,7 +6,7 @@ import type { ServiceSelection } from '../domain/service-selection'
 import { nextDistinctRenewals, normalizeCost, renewalChargeTotals, upcomingRenewals, type Subscription } from '../domain/subscriptions'
 import type { CostProvider, CostSnapshot } from '../domain/usage-costs'
 
-const props = defineProps<{ subscriptions: readonly Subscription[]; snapshots: readonly CostSnapshot[]; today: string; staleHostinger?: boolean }>()
+const props = defineProps<{ subscriptions: readonly Subscription[]; snapshots: readonly CostSnapshot[]; today: string; hostingerCoverageWarning?: string }>()
 const emit = defineEmits<{ select: [selection: ServiceSelection] }>()
 type ProviderFilter = 'all' | 'manual' | CostProvider | 'hostinger'
 const days = ref<30 | 90 | 365>(30)
@@ -114,7 +114,7 @@ function nextDate(value: string) { return new Date(`${value}T00:00:00Z`).toLocal
     <div class="timeline-lanes">
       <section class="timeline-lane" aria-labelledby="renewal-lane-heading"><header><div><p class="eyebrow">Scheduled · not billed</p><h3 id="renewal-lane-heading">Payment schedule</h3></div><div class="schedule-controls"><div class="timeline-windows" role="group" aria-label="Payment schedule horizon"><button v-for="window in scheduleWindows" :key="window.id" type="button" :aria-pressed="scheduleHorizon === window.id" @click="scheduleHorizon = window.id">{{ window.label }}</button></div><span class="metric-note">{{ date(props.today) }}–{{ date(scheduleEnd) }} UTC</span></div></header>
         <div v-if="typeFilter === 'all' || typeFilter === 'renewal'" class="schedule-total" role="group" aria-label="Scheduled charge totals"><strong>Scheduled charges in this window</strong><span v-for="total in scheduledTotals" :key="total.currency">{{ money(total.amount, total.currency) }} · {{ total.currency }}</span><small>Includes repeated renewals; currencies are kept separate. Scheduled charges are not confirmed payments.</small></div>
-        <p v-if="props.staleHostinger" class="feed-warning" role="status">Some Hostinger renewal dates need confirmation and are omitted from this schedule. <a href="/services">Review Hostinger services</a>.</p>
+        <p v-if="props.hostingerCoverageWarning" class="feed-warning hostinger-coverage-warning" role="status">{{ props.hostingerCoverageWarning }} <a href="/services#hostinger-discovery">Review Hostinger services</a>.</p>
         <p v-if="!visibleRenewals.length" class="timeline-empty" role="status">{{ renewals.length ? 'No renewals match these filters.' : `No active renewal is scheduled in the next ${scheduleWindowLabel.toLowerCase()}.` }}</p>
         <ol v-else class="timeline-list renewal-list renewal-timeline-list"><li v-for="row in visibleRenewals" :key="`${row.subscription.id}-${row.date}`"><time :datetime="row.date"><span>{{ nextDate(row.date) }}</span><strong>{{ row.date.slice(8) }}</strong></time><div><button class="timeline-service-link" type="button" @click="emit('select', { kind: 'subscription', id: row.subscription.id })"><strong>{{ row.subscription.name }}</strong><span>{{ row.subscription.provider ?? 'Manual subscription' }} · every {{ row.subscription.recurrenceInterval }} {{ row.subscription.recurrenceUnit }}{{ row.subscription.recurrenceInterval === 1 ? '' : 's' }}</span></button><small>Monthly average: {{ money(normalizeCost(row.subscription).monthly, row.currency) }} · comparison only</small></div><strong class="amount" :aria-label="`Scheduled renewal ${money(row.amount, row.currency)}`">{{ money(row.amount, row.currency) }}</strong></li></ol>
       </section>
