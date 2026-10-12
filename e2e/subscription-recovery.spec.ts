@@ -124,7 +124,7 @@ test('ambiguous 503 checks the stable draft ID before retry and recognizes the s
   await expect(form.getByRole('alert')).toContainText('could not be confirmed')
   await form.getByRole('button', { name: 'Check save status' }).click()
   await expect(form).not.toBeVisible()
-  await expect(page.getByRole('row').filter({ hasText: 'Maybe saved' })).toBeVisible()
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'Maybe saved' })).toBeVisible()
   expect(postCalls).toBe(1)
 })
 

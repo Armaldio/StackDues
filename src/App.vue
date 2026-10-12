@@ -8,6 +8,7 @@ import CostHistory from './components/CostHistory.vue'
 import LegacyImport from './components/LegacyImport.vue'
 import ServiceDetail from './components/ServiceDetail.vue'
 import SpendingTimeline from './components/SpendingTimeline.vue'
+import ServiceInventory from './components/ServiceInventory.vue'
 import type { ServiceSelection } from './domain/service-selection'
 import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, upcomingRenewals, type Subscription } from './domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, CostFeedReadError } from './lib/cost-feed'
@@ -66,11 +67,28 @@ async function reloadLedger() {
   finally { loading.value = false }
 }
 const legacyPaths: Record<string, string> = { overview: '/', subscriptions: '/services', connections: '/connections', history: '/history', infrastructure: '/services', 'hostinger-discovery': '/services' }
+const hostingerDisclosure = ref<HTMLDetailsElement>()
+async function focusHostingerTarget() {
+  if (route.value.hash !== '#hostinger-discovery' || currentSection.value !== 'services') return
+  await nextTick()
+  if (!hostingerStateResolved.value) return
+  if (hostingerDisclosure.value) hostingerDisclosure.value.open = true
+  await nextTick()
+  const target = document.getElementById('hostinger-discovery')
+  target?.scrollIntoView({ block: 'start' })
+  target?.focus({ preventScroll: true })
+}
 function normalizeLegacyHash(hash = route.value.hash) {
   const section = hash.slice(1) || window.location.hash.slice(1)
+  if (section === 'hostinger-discovery') {
+    if (route.value.path !== '/services') void router.replace({ path: '/services', hash: '#hostinger-discovery' })
+    else void focusHostingerTarget()
+    return
+  }
   if (section && legacyPaths[section]) void router.replace({ path: legacyPaths[section]!, hash: '' })
 }
-watch(() => route.value.hash, hash => { if (hash) normalizeLegacyHash(hash) })
+watch(() => [route.value.path, route.value.hash], ([, hash]) => { if (hash) normalizeLegacyHash(hash); else void focusHostingerTarget() })
+watch(hostingerStateResolved, () => { void focusHostingerTarget() })
 onMounted(() => {
   void reloadLedger()
   void fetchCostFeed('/api/costs').then(feed => { setCostFeed(feed); financialRefreshError.value = ''; costFeedReadError.value = '' }).catch(cause => { costFeedReadState.value = failedReadState(!!costFeedReadAt.value, readIsExpired(cause)); costFeedReadError.value = cause instanceof Error ? cause.message : 'Saved billing data could not be loaded.' })
@@ -185,6 +203,12 @@ function openServiceDetails(selection: ServiceSelection, event?: Event) {
   void router.push({ query: { ...route.value.query, detail } })
 }
 function openProviderDetails(provider: CostProvider | 'hostinger' | 'github', event?: Event) { openServiceDetails({ kind: 'provider', provider }, event) }
+async function openHostingerManagement() {
+  if (hostingerDisclosure.value) hostingerDisclosure.value.open = true
+  await nextTick()
+  document.getElementById('hostinger-discovery')?.scrollIntoView({ block: 'start' })
+  document.getElementById('hostinger-discovery')?.focus({ preventScroll: true })
+}
 async function closeServiceDetails() {
   if (route.value.query.detail) {
     if (detailOpenedFromScreen.value) {
@@ -224,6 +248,27 @@ function providerConnectionNote(provider: 'aws' | 'cloudflare' | 'openai' | 'dig
 function hostingerIsConfigured() { return connectionStatuses.value ? connectionStatuses.value.hostinger.configured : !!hostingerState.value && hostingerState.value.sync.status !== 'not-configured' }
 const connectedMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(providerIsConfigured))
 const connectedBillingProviders = computed(() => (['aws', 'cloudflare', 'openai', 'digitalocean'] as const).filter(providerIsConfigured))
+const serviceProviders = computed(() => [
+  ...(['aws', 'cloudflare', 'openai', 'digitalocean'] as const).map(provider => {
+    const state = costFeed.value.providers[provider]
+    const rows = currentCostSnapshots(costFeed.value).filter(row => row.provider === provider && row.kind === 'actual')
+    const reported = rows.map(row => provider === 'digitalocean'
+      ? `Finalized invoice total · ${money(row.amount, row.currency)} · ${row.periodStart.slice(0, 7)} invoice period`
+      : `Reported actual · ${money(row.amount, row.currency)} · ${row.periodStart}–${row.periodEnd} (end exclusive)`).join(' · ')
+    const latestCapture = Math.max(...currentCostSnapshots(costFeed.value).filter(row => row.provider === provider).map(row => Date.parse(row.capturedAt)))
+    const forecasts = currentCostSnapshots(costFeed.value).filter(row => row.provider === provider && row.kind === 'forecast' && Date.parse(row.capturedAt) === latestCapture)
+      .map(row => `Full-month forecast (includes actuals) · ${money(row.amount, row.currency)}`).join(' · ')
+    const serviceNames = rows.flatMap(row => Array.isArray(row.metadata?.breakdown) ? row.metadata.breakdown.map(item => typeof item === 'object' && item && 'service' in item ? String(item.service) : '') : []).filter(Boolean)
+    const summary = [reported, provider === 'digitalocean' ? '' : forecasts].filter(Boolean).join(' · ') || (state.status === 'error' ? 'Last sync failed; last known usage may be available in details.' : state.status === 'synced' ? provider === 'digitalocean' ? 'Checked successfully; no finalized invoice total is available.' : 'Checked successfully; no current usage report.' : hasCostReadFailure.value ? 'Usage data could not be loaded; current usage is unavailable.' : state.status === 'not-configured' ? 'Usage not connected; no reported amount.' : 'Usage data is pending.')
+    return { id: provider, name: providerName(provider), status: state.status, summary: `${summary}${serviceNames.length ? ` · ${serviceNames.join(' ')}` : ''}` }
+  }),
+  {
+    id: 'hostinger' as const, name: 'Hostinger',
+    status: hostingerState.value?.sync.status ?? (hostingerIsConfigured() ? hostingerStateResolved.value ? 'error' : 'pending' : 'not-configured'),
+    summary: hostingerState.value?.sync.status === 'error' ? 'Latest sync failed; saved subscriptions and previous discoveries are retained.' : hostingerState.value?.sync.status === 'synced' ? `${hostingerState.value.subscriptions.filter(row => row.linkedSubscriptionId).length} linked renewal(s); unlinked discoveries need review.` : hostingerIsConfigured() ? hostingerStateResolved.value ? 'Hostinger discovery could not be loaded; saved subscriptions remain in the inventory.' : 'Hostinger data is pending; saved linked renewals remain in fixed subscriptions.' : 'No Hostinger connection; saved manual renewals remain searchable.',
+  },
+])
+const hostingerInventoryRows = computed(() => hostingerState.value?.subscriptions ?? [])
 const meteredTotals = computed(() => usageTotals(meterSnapshots.value, today.value, connectedMeteredProviders.value))
 const trackedTotals = computed(() => trackedSpendingTotals(totals.value, meteredTotals.value, connectedMeteredProviders.value, meterSnapshots.value))
 const providerUsage = computed(() => ({
@@ -309,7 +354,6 @@ const overviewEmptyMessage = computed(() => {
   if (connectionStatusesError.value && !connectionStatuses.value) return 'Provider connection status is unavailable; a zero summary cannot be confirmed.'
   return 'No spending data has arrived yet.'
 })
-const visibleSubscriptions = computed(() => subscriptions.value.filter((item) => (statusFilter.value === 'all' || item.status === statusFilter.value) && `${item.name} ${item.provider ?? ''}`.toLowerCase().includes(search.value.toLowerCase())))
 function money(amount: number | null, currency: string) { if (amount === null) return `${currency} total unavailable`; try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, currencyDisplay: 'code' }).format(amount) } catch { return `${currency} ${amount.toFixed(2)}` } }
 function dateLabel(date: string) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) }
 function periodDescription(provider: 'aws' | 'cloudflare' | 'openai', currency: string) {
@@ -549,16 +593,16 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       </details>
       </template>
       <section v-if="currentSection === 'services'" id="services" class="services-screen">
-      <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><NuxtLink class="text-button" to="/history#payment-schedule">Payment schedule</NuxtLink><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button><template v-if="subscriptions.length"><label class="sr-only" for="subscription-search">Search subscriptions</label><input id="subscription-search" v-model="search" type="search" placeholder="Search subscriptions" /><label class="sr-only" for="status-filter">Filter by status</label><select id="status-filter" v-model="statusFilter"><option value="all">All statuses</option><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></template></div></div>
+      <section id="subscriptions" class="subscriptions-section" aria-labelledby="subscriptions-title"><div class="section-header"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="subscriptions-title">Subscriptions <span v-if="loaded" class="heading-count">{{ subscriptions.length }}</span></h2></div><div class="table-tools"><NuxtLink class="text-button" to="/history#payment-schedule">Payment schedule</NuxtLink><button class="secondary-button" type="button" :disabled="blocked" @click="downloadSubscriptions">Download subscriptions JSON</button></div></div>
         <p v-if="subscriptionsReadState === 'pending'" role="status">Checking saved subscriptions…</p>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
-        <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No manual subscriptions yet</h3><p>Connect a provider above to sync your costs, or add services such as Bitwarden Premium and ChatGPT Plus yourself.</p></div>
-        <div v-else-if="subscriptions.length" class="table-scroll" role="region" tabindex="0" aria-label="Subscriptions table. Scroll horizontally to view all columns."><p class="table-scroll-hint" aria-hidden="true">Scroll horizontally to view all columns</p><table><thead><tr><th scope="col">Subscription</th><th scope="col">Charge / cycle</th><th scope="col">Monthly equivalent</th><th scope="col">Next renewal</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="item in visibleSubscriptions" :key="item.id"><th scope="row"><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: item.id }, $event)"><strong>{{ item.name }}</strong><span class="cell-note">{{ item.provider || 'Fixed subscription' }}</span></button></th><td><strong class="amount">{{ money(item.amount, item.currency) }}</strong><span class="cell-note">{{ recurrence(item) }}</span></td><td class="amount">{{ money(normalizeCost(item).monthly, item.currency) }}</td><td>{{ nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—' }}</td><td><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></td><td><div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="openForm(item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="setStatus(item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="remove(item)">Delete</button></div></td></tr><tr v-if="!visibleSubscriptions.length"><td colspan="6" class="no-results">No subscriptions match your filters.</td></tr></tbody></table></div>
+        <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No fixed subscriptions yet</h3><p>Provider usage and unlinked Hostinger discoveries appear in the services inventory below; add a service to track fixed renewals.</p></div>
+        <ServiceInventory v-if="loaded" v-model:query="search" v-model:status="statusFilter" :subscriptions="subscriptions" :providers="serviceProviders" :discovered="hostingerInventoryRows" :blocked="blocked" :loading="loading || costFeedReadState === 'pending' || !hostingerStateResolved" :format-money="(amount, currency) => amount === null ? 'Price unavailable' : money(amount, currency)" :recurrence="recurrence" :monthly="item => normalizeCost(item).monthly" :renewal="item => nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—'" @details="openServiceDetails($event)" @edit="openForm" @toggle="setStatus" @remove="remove" @review="openHostingerManagement" />
       </section>
       <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
-      <p v-if="currentSection === 'services' && !hostingerStateResolved" role="status">Checking saved Hostinger services…</p>
-      <KeepAlive><HostingerDiscovery v-if="currentSection === 'services' && hostingerStateResolved" :initial="hostingerState" :ledger="subscriptions" @changed="reloadLedger" @loaded="setHostingerState" /></KeepAlive>
-      <KeepAlive><InfrastructurePanel v-if="currentSection === 'services' && connectionStatusesResolved" :initial-feed="costFeed" :fixed-totals="totals" :today="today" :configured-providers="connectedBillingProviders" :feed-read-state="costFeedReadState" :feed-read-at="costFeedReadAt" @details="openProviderDetails($event)" /></KeepAlive>
+      <p v-if="!hostingerStateResolved" role="status">Checking saved Hostinger services…</p>
+      <details v-if="hostingerStateResolved" ref="hostingerDisclosure" class="inventory-management"><summary>Hostinger matching, exclusions and sync controls</summary><KeepAlive><HostingerDiscovery v-if="currentSection === 'services'" :initial="hostingerState" :ledger="subscriptions" @changed="reloadLedger" @loaded="setHostingerState" /></KeepAlive></details>
+      <details v-if="connectionStatusesResolved" class="inventory-management"><summary>Provider usage reports and technical details</summary><KeepAlive><InfrastructurePanel v-if="currentSection === 'services'" :initial-feed="costFeed" :fixed-totals="totals" :today="today" :configured-providers="connectedBillingProviders" :feed-read-state="costFeedReadState" :feed-read-at="costFeedReadAt" @details="openProviderDetails($event)" /></KeepAlive></details>
       </section>
       <p v-if="currentSection === 'connections' && !connectionStatusesResolved" role="status">Checking saved provider connections…</p>
       <KeepAlive><ConnectionsPanel v-if="currentSection === 'connections' && connectionStatusesResolved" :initial-statuses="connectionStatuses" :cost-feed="costFeed" :hostinger="hostingerState" @loaded="setConnectionStatuses" @changed="reloadFinancialViews" @details="openProviderDetails($event)" /></KeepAlive>

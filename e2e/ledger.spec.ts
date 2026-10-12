@@ -56,6 +56,16 @@ async function revealProviderDetails(page: Page) {
   if (await disclosure.getAttribute('open') === null) await disclosure.locator('summary').click()
 }
 
+async function revealServiceInfrastructure(page: Page) {
+  const disclosure = page.locator('.inventory-management').filter({ hasText: 'Provider usage reports and technical details' })
+  if (await disclosure.getAttribute('open') === null) await disclosure.locator('summary').click()
+}
+
+async function revealHostingerManagement(page: Page) {
+  const disclosure = page.locator('.inventory-management').filter({ hasText: 'Hostinger matching, exclusions and sync controls' })
+  if (await disclosure.getAttribute('open') === null) await disclosure.locator(':scope > summary').click()
+}
+
 const routedScreens = [
   { path: '/', title: 'Overview', nav: 'Overview' },
   { path: '/services', title: 'Services', nav: 'Services' },
@@ -90,7 +100,7 @@ test('first run prioritizes provider connections and preserves a keyboard-friend
   await expect(connect).toBeVisible()
   await expect(addManually).toBeVisible()
   await expect(page.getByText('Try example subscriptions')).toHaveCount(0)
-  await expect(page.getByRole('row')).toHaveCount(0)
+  await expect(page.locator('.service-inventory')).toHaveCount(0)
   await page.goto('/services')
   const emptyDownloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Download subscriptions JSON' }).click()
@@ -298,6 +308,7 @@ test('scheduled persisted updates reach Overview without reload and route change
   })
   await page.route('**/api/costs/refresh*', route => { syncPosts++; return route.fulfill({ json: { providers: { aws: { status: 'synced' } } } }) })
   await page.goto('/services')
+  await revealHostingerManagement(page)
   await expect(page.locator('#hostinger-discovery')).toContainText('No Hostinger subscriptions were returned')
   await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Overview' }).click()
   const summary = page.locator('.overview-snapshot')
@@ -315,6 +326,7 @@ test('scheduled persisted updates reach Overview without reload and route change
     await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: label }).click()
     await expect(page).toHaveURL(new RegExp(`${path === '/' ? '/?$' : `${path}/?$`}`))
     if (path === '/services') {
+      await revealHostingerManagement(page)
       await expect(page.locator('#hostinger-discovery')).toContainText('Cron updated Hostinger service')
       await expect(page.getByRole('button', { name: 'Refresh providers' })).toHaveCount(0)
       await expect(page.getByRole('button', { name: 'Reload cost data' })).toHaveCount(0)
@@ -369,7 +381,11 @@ test('legacy hashes map safely and all routed screens fit at 375px', async ({ pa
   ]
   for (const { hash, screen } of legacyHashes) {
     await page.goto(`/${hash}`)
-    await expectRoutedScreen(page, screen)
+    if (hash === '#hostinger-discovery') {
+      await expect(page).toHaveURL(/\/services#hostinger-discovery$/)
+      await expect(page.getByRole('heading', { level: 1, name: /^Services/ })).toBeVisible()
+      await expect(page.locator('#hostinger-discovery')).toBeFocused()
+    } else await expectRoutedScreen(page, screen)
   }
 
   await page.setViewportSize({ width: 375, height: 812 })
@@ -395,11 +411,17 @@ test('four screens stay within the viewport at supported widths and scrollable t
       await expectRoutedScreen(page, screen)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${screen.title} overflows at ${viewport.width}px`).toBe(true)
       if (screen.path === '/services' || screen.path === '/history') {
-        const table = page.getByRole('region', { name: /table\. Scroll horizontally/ })
-        await expect(table).toHaveAttribute('tabindex', '0')
-        await table.focus()
-        await expect(table).toBeFocused()
-        if (viewport.width <= 600) await expect(table.locator('.table-scroll-hint')).toBeVisible()
+        if (screen.path === '/services') {
+          const search = page.getByRole('searchbox', { name: 'Search services' })
+          await search.focus()
+          await expect(search).toBeFocused()
+        } else {
+          const table = page.getByRole('region', { name: /table\. Scroll horizontally/ })
+          await expect(table).toHaveAttribute('tabindex', '0')
+          await table.focus()
+          await expect(table).toBeFocused()
+          if (viewport.width <= 600) await expect(table.locator('.table-scroll-hint')).toBeVisible()
+        }
         const editTarget = screen.path === '/services' ? page.getByRole('button', { name: 'Edit Matrix VPS' }) : undefined
         if (editTarget && viewport.width <= 600) expect((await editTarget.boundingBox())?.height).toBeGreaterThanOrEqual(44)
       }
@@ -483,7 +505,7 @@ test('fresh subscriptions support real recurrence, edits, status changes, deleti
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
   await mockLedger(page)
   await page.goto('./services')
-  await expect(page.getByRole('heading', { name: 'No manual subscriptions yet' })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('heading', { name: 'No fixed subscriptions yet' })).toBeVisible({ timeout: 15_000 })
   await add(page, 'Bitwarden', '10', '1', 'year')
   await add(page, 'Hostinger', '192', '4', 'year')
   await add(page, 'VPS', '12', '1', 'month')
@@ -494,7 +516,7 @@ test('fresh subscriptions support real recurrence, edits, status changes, deleti
   await expect(page.locator('.overview-renewal-list')).toContainText('Hostinger')
   await page.goto('/services')
   await page.reload()
-  await expect(page.getByRole('row').filter({ hasText: 'Hostinger' })).toContainText('Every 4 years')
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'Hostinger' })).toContainText('Every 4 years')
   await page.getByRole('button', { name: 'Pause VPS in subscriptions', exact: true }).click()
   await page.goto('/')
   await expect(page.locator('.overview-currency-card').filter({ hasText: 'USD' }).locator('.overview-spend-pair')).toContainText('USD 4.83')
@@ -518,7 +540,7 @@ test('fresh subscriptions support real recurrence, edits, status changes, deleti
   await page.goto('/services')
   page.on('dialog', dialog => dialog.accept())
   await page.getByRole('button', { name: 'Delete Euro domain', exact: true }).click()
-  await expect(page.getByRole('row').filter({ hasText: 'Euro domain' })).toHaveCount(0)
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'Euro domain' })).toHaveCount(0)
   await page.goto('/')
   await page.setViewportSize({ width: 320, height: 850 })
   await expect(page.getByRole('heading', { name: 'Overview.' })).toBeVisible()
@@ -548,7 +570,7 @@ test('subscription export contains importer-compatible account records without s
   expect(JSON.parse(json)).toEqual([{ id: 'hostinger-domain', name: 'Example domain', provider: 'Hostinger', billingType: 'fixed', amount: 12, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2027-10-08', status: 'active' }])
   expect(json).not.toMatch(/revision|encryptedCredentials|private-provider-secret|sessionToken|private-session-token/)
   expect(writes).toBe(0)
-  await expect(page.getByRole('row').filter({ hasText: 'Example domain' })).toBeVisible()
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'Example domain' })).toBeVisible()
 })
 
 test('subscription export failures stay visible and never mutate the account', async ({ page }) => {
@@ -557,7 +579,7 @@ test('subscription export failures stay visible and never mutate the account', a
   await page.goto('./services')
   await page.getByRole('button', { name: 'Download subscriptions JSON' }).click()
   await expect(page.getByRole('alert')).toContainText('Your account was not changed')
-  await expect(page.getByRole('row').filter({ hasText: 'Keep me' })).toBeVisible()
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'Keep me' })).toBeVisible()
 })
 
 test('subscription export stays disabled when the protected ledger request fails', async ({ page }) => {
@@ -581,6 +603,7 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
   await page.route('**/api/costs', route => route.fulfill(fail ? { status: 503, body: 'offline' } : { json: feed }))
   await mockLedger(page, [], false)
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   const infrastructure = page.locator('#infrastructure')
   await expect(infrastructure.getByText('EC2', { exact: true })).toBeVisible()
   await expect(infrastructure.getByText('R2 Storage', { exact: true })).toBeVisible()
@@ -590,8 +613,11 @@ test('provider observations, incomplete forecasts, failures, stale data, and imm
   await page.goto('./history')
   await expect(page.locator('#history')).toContainText('AWS')
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   feed.snapshots[2]!.capturedAt = stale
   feed.providers.cloudflare.lastSyncedAt = stale
+  await page.reload()
+  await revealServiceInfrastructure(page)
   await expect(infrastructure.getByText(/Data is over 36 hours old/)).toBeVisible()
   fail = true
   await page.evaluate(() => {
@@ -625,11 +651,11 @@ test('explicit legacy import backs up original JSON, preserves existing account 
   expect(await readFile((await download.path())!, 'utf8')).toBe(raw)
   await panel.getByRole('button', { name: 'Import to my account' }).click()
   await expect(panel.getByRole('status')).toContainText('1 subscriptions imported and verified')
-  await expect(page.getByRole('row').filter({ hasText: 'Bitwarden' })).toContainText('USD 20.00')
-  await expect(page.getByRole('row').filter({ hasText: 'VPS' })).toContainText('USD 12.00')
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'Bitwarden' })).toContainText('USD 20.00')
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'VPS' })).toContainText('USD 12.00')
   expect(await page.evaluate(() => localStorage.getItem('ledger.subscriptions.v1'))).toBe(raw)
   await page.reload()
-  await expect(page.getByRole('row').filter({ hasText: 'VPS' })).toBeVisible()
+  await expect(page.locator('.subscription-inventory-card').filter({ hasText: 'VPS' })).toBeVisible()
 })
 
 
@@ -687,6 +713,7 @@ test('connections keep secrets request-only, preserve revisions, and automatical
   await expect(page.locator('.overview-snapshot')).not.toContainText('USD 3.00')
   await expect(page.locator('.overview-snapshot')).not.toContainText('USD 10.00')
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   await expect(page.locator('#infrastructure .provider-panel').first().getByText('Not connected')).toBeVisible()
   await expect(page.locator('#infrastructure .usage-summary')).toHaveCount(0)
   await page.goto('./history')
@@ -736,6 +763,7 @@ test('connecting AWS automatically updates Overview, Infrastructure and History 
   await expect(page.locator('.tracked-spending-card')).not.toContainText('USD 123.00')
   await expect(page.locator('.tracked-spending-card')).not.toContainText('USD 130.00')
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$3.00')
   await page.goto('./history')
   await expect(page.locator('#history')).toContainText('AWS')
@@ -785,6 +813,7 @@ test('connecting Cloudflare shows actual spend prominently when no forecast is a
   await expect(overview).toContainText('Cloud usage reported')
   await expect(overview.locator('.overview-forecast')).toHaveCount(0)
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   await expect(page.locator('#infrastructure .provider-cost strong').first()).toHaveText('$8.00')
   await page.goto('./history')
   await expect(page.locator('#history')).toContainText('Cloudflare')
@@ -834,6 +863,7 @@ test('OpenAI organization costs connect with explicit admin scope and update Ove
   await expect(overview).toContainText('Full-month estimate')
   await expect(overview).toContainText('Unavailable')
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   await expect(page.locator('#infrastructure')).toContainText('Organization-reported API costs')
   await expect(page.locator('#infrastructure')).toContainText('$4.75')
   await page.goto('./history')
@@ -884,6 +914,7 @@ test('DigitalOcean imports finalized invoices on connect without counting previe
   await expect(overview).toContainText('USD 18.40')
   await expect(overview).toContainText('Finalized invoice totals')
   await page.goto('./services')
+  await revealServiceInfrastructure(page)
   await expect(page.locator('#infrastructure')).toContainText('Finalized invoice total ·')
   await expect(page.locator('#infrastructure')).toContainText('$18.40')
   await page.goto('./history')
@@ -937,8 +968,8 @@ test('manual subscription details show the saved renewal and allow editing; GitH
   const subscription = { id: 'manual-vault', name: 'Password Vault', billingType: 'fixed', amount: 120, currency: 'CAD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: renewalDate, status: 'active', revision: 1 }
   await mockLedger(page, [subscription])
   await page.goto('./services')
-  const subscriptionRow = page.locator('#subscriptions tbody tr').filter({ hasText: 'Password Vault' })
-  await subscriptionRow.getByRole('button', { name: /Password Vault Fixed/ }).click()
+  const subscriptionRow = page.locator('.subscription-inventory-card').filter({ hasText: 'Password Vault' })
+  await subscriptionRow.getByRole('button', { name: 'Password Vault', exact: true }).click()
   const detail = page.getByRole('dialog', { name: 'Password Vault' })
   await expect(detail).toContainText('CAD 120.00')
   await expect(detail).toContainText('CAD 10.00')
@@ -1201,6 +1232,7 @@ test('connecting Hostinger automatically discovers subscriptions without pressin
   await expect(card.getByText('Updated', { exact: true })).toBeVisible()
   await expect(card).toContainText('Next: review eligible fixed renewals in Hostinger subscriptions below.')
   await page.goto('./services')
+  await revealHostingerManagement(page)
   const hostingerPanel = page.locator('#hostinger-discovery')
   await expect(hostingerPanel).toContainText('KVM from Hostinger')
   await expect(hostingerPanel.getByText('Tracked automatically', { exact: true })).toBeVisible()
@@ -1239,6 +1271,7 @@ test('stale Hostinger commitments remain visible but are omitted from upcoming c
   const source = { externalId: 'stale-vps', name: 'Stale VPS', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 90, renewalPrice: 120, isAutoRenewed: true, createdAt: '2025-10-08T00:00:00.000Z', expiresAt: null, nextBillingAt: `${renewalDate}T00:00:00.000Z`, linkedSubscriptionId: subscription.id, automaticallyLinked: true, excluded: false, possibleMatches: [], providerNameCollision: false, seenInLatestSync: false, renewalAvailable: true, upcomingCommitment: 120 }
   await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [source], sync: { status: 'error', lastAttemptAt: new Date().toISOString(), lastSyncedAt: '2026-10-01T00:00:00Z' } } }))
   await page.goto('./services')
+  await revealHostingerManagement(page)
   await expect(page.locator('#hostinger-discovery').getByText('Unconfirmed · last sync failed', { exact: true })).toBeVisible()
   await page.goto('./')
   await revealProviderDetails(page)
@@ -1262,6 +1295,7 @@ test('Hostinger renewal discovery stays out of totals until linked or added and 
   })
   await page.route('**/api/hostinger/subscriptions/provider-kvm-1/entry', async route => { added = true; return route.fulfill({ json: { ...legacy, id: 'new-entry', name: source.name, amount: source.renewalPrice, revision: 1 } }) })
   await page.goto('./services')
+  await revealHostingerManagement(page)
   const panel = page.locator('#hostinger-discovery')
   await expect(panel.getByText('USD 179.99', { exact: true })).toBeVisible()
   await expect(panel.getByText('Unconfirmed · needs review', { exact: true })).toBeVisible()

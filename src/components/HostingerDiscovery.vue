@@ -85,7 +85,7 @@ watch(() => props.initial, next => { if (next) setState(next) })
 </script>
 
 <template>
-  <section id="hostinger-discovery" class="hostinger-discovery" aria-labelledby="hostinger-discovery-heading">
+  <section id="hostinger-discovery" class="hostinger-discovery" aria-labelledby="hostinger-discovery-heading" tabindex="-1">
     <div class="section-header"><div><p class="eyebrow">Fixed renewal discovery</p><h2 id="hostinger-discovery-heading">Hostinger subscriptions</h2></div></div>
     <p class="section-description">Eligible renewals are added automatically. Possible manual matches need your review; existing values are preserved when linked.</p>
     <p v-if="error" class="error-message" role="alert">{{ error }} <a v-if="expired" href="/login">Sign in</a><button v-else class="text-button" type="button" :disabled="loading" @click="load">Try again</button></p>
