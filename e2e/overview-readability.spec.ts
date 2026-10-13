@@ -11,6 +11,27 @@ function subscription(id: string, amount: number, currency: string, recurrenceIn
   return { id, name: id, billingType: 'fixed', amount, currency, recurrenceInterval, recurrenceUnit, nextRenewalAt, status: 'active', revision: 1 }
 }
 
+test('Overview separates this month’s scheduled charges from monthly equivalents and reported usage', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 })
+  await page.route('**/api/subscriptions**', route => route.fulfill({ json: [
+    { ...subscription('Monthly EUR renewal', 23, 'EUR'), nextRenewalAt: today },
+    { ...subscription('Annual USD renewal', 120, 'USD', 1, 'year'), nextRenewalAt: today },
+  ] }))
+  await page.route('**/api/connections', route => route.fulfill({ json: Object.fromEntries(['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger'].map(provider => [provider, { configured: false, revision: 0 }])) }))
+  await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: Object.fromEntries(['aws', 'cloudflare', 'openai', 'digitalocean'].map(provider => [provider, { status: 'not-configured' }])) } }))
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [], sync: { status: 'not-configured' } } }))
+  await page.goto('/')
+
+  const month = page.locator('.current-month-schedule')
+  await expect(month.getByRole('heading')).toContainText('Scheduled fixed charges left in')
+  await expect(month).toContainText('EUR 23.00')
+  await expect(month).toContainText('USD 120.00')
+  await expect(month).not.toContainText('143.00')
+  await expect(page.locator('.overview-currency-card').filter({ hasText: 'USD' })).toContainText('USD 10.00')
+  await expect(page.locator('.overview-currency-card').filter({ hasText: 'USD' })).toContainText('Monthly comparison only')
+  await expect(page.locator('.overview-currency-card').filter({ hasText: 'USD' })).not.toContainText('USD 130.00')
+})
+
 async function fixture(page: Page, state: 'mixed' | 'long' | 'manual' | 'unavailable' | 'forecast') {
   const configured = state === 'mixed' || state === 'long' || state === 'unavailable' || state === 'forecast'
   const subscriptions = state === 'long'

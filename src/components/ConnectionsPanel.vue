@@ -34,6 +34,7 @@ const setupGuidance: Record<ConnectionProvider, { instruction: string; docs: str
 }
 const plannedProviders = [
   { name: 'GitHub', coverage: 'Personal billing usage; currency and payer details are not exposed by the current API, so money totals are not available yet', setup: 'Enhanced billing access may be required' },
+  { name: 'Supabase', coverage: 'A Supabase billing and project-usage connection has not been implemented yet', setup: 'No Supabase credentials are collected by StackDues' , status: 'Not available yet' },
 ]
 const search = ref('')
 const availability = ref<'all' | 'available' | 'coming-soon'>('all')
@@ -157,7 +158,7 @@ onUnmounted(() => providers.forEach(clear))
     <p v-if="!visibleProviders.length && !visiblePlannedProviders.length" class="catalog-empty" role="status">No providers match your search.</p>
     <div v-if="visibleProviders.length" class="connection-grid">
       <article v-for="provider in visibleProviders" :key="provider" class="connection-card">
-        <header><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ names[provider] }}</button></h3><span class="status-pill">{{ connectionLabel(provider) }}</span></header>
+        <header><div><h3><button class="service-detail-trigger" type="button" @click="emit('details', provider)">{{ names[provider] }}</button></h3><p v-if="connectionLabel(provider) === 'Updated' && lastRefresh(provider)" class="connection-last-refresh">Synced {{ formatTime(lastRefresh(provider)!) }}</p></div><span class="status-pill">{{ connectionLabel(provider) }}</span></header>
         <p><strong>Data available:</strong> {{ coverage[provider] }}</p>
         <p><strong>Access:</strong> {{ permissions[provider] }}</p>
         <p class="connection-guidance">{{ setupGuidance[provider].instruction }} <a :href="setupGuidance[provider].docs" target="_blank" rel="noopener noreferrer">{{ setupGuidance[provider].docsLabel }}</a><template v-if="provider === 'hostinger'"> · <a href="/services#hostinger-discovery">Manage Hostinger renewals</a></template></p>
@@ -185,7 +186,7 @@ onUnmounted(() => providers.forEach(clear))
     </div>
     <div v-if="visiblePlannedProviders.length" class="connection-grid planned-grid" aria-label="Coming soon providers">
       <article v-for="provider in visiblePlannedProviders" :key="provider.name" class="connection-card coming-soon-card">
-        <header><h3><button class="service-detail-trigger" type="button" @click="emit('details', 'github')">{{ provider.name }}</button></h3><span class="status-pill planned-pill">Coming soon</span></header>
+        <header><h3 v-if="provider.name === 'GitHub'"><button class="service-detail-trigger" type="button" @click="emit('details', 'github')">{{ provider.name }}</button></h3><h3 v-else>{{ provider.name }}</h3><span class="status-pill planned-pill">{{ 'status' in provider ? provider.status : 'Coming soon' }}</span></header>
         <p><strong>Planned data:</strong> {{ provider.coverage }}</p>
         <p><strong>Setup prerequisite:</strong> {{ provider.setup }}</p>
         <p class="metric-note">This provider is not connected and has no active credential or sync controls.</p>

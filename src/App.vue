@@ -10,7 +10,7 @@ import ServiceDetail from './components/ServiceDetail.vue'
 import SpendingTimeline from './components/SpendingTimeline.vue'
 import ServiceInventory from './components/ServiceInventory.vue'
 import type { ServiceSelection } from './domain/service-selection'
-import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, upcomingRenewals, type Subscription } from './domain/subscriptions'
+import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription } from './domain/subscriptions'
 import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, CostFeedReadError } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
@@ -248,21 +248,22 @@ const serviceProviders = computed(() => [
   ...(['aws', 'cloudflare', 'openai', 'digitalocean'] as const).map(provider => {
     const state = costFeed.value.providers[provider]
     const rows = currentCostSnapshots(costFeed.value).filter(row => row.provider === provider && row.kind === 'actual')
+    const serviceNames = rows.flatMap(row => Array.isArray(row.metadata?.breakdown) ? row.metadata.breakdown.map(item => typeof item === 'object' && item && 'service' in item ? String(item.service) : '') : []).filter(Boolean)
     const reported = rows.map(row => provider === 'digitalocean'
       ? `Finalized invoice total · ${money(row.amount, row.currency)} · ${row.periodStart.slice(0, 7)} invoice period`
       : `Reported actual · ${money(row.amount, row.currency)} · ${row.periodStart}–${row.periodEnd} (end exclusive)`).join(' · ')
     const latestCapture = Math.max(...currentCostSnapshots(costFeed.value).filter(row => row.provider === provider).map(row => Date.parse(row.capturedAt)))
     const forecasts = currentCostSnapshots(costFeed.value).filter(row => row.provider === provider && row.kind === 'forecast' && Date.parse(row.capturedAt) === latestCapture)
       .map(row => `Full-month forecast (includes actuals) · ${money(row.amount, row.currency)}`).join(' · ')
-    const serviceNames = rows.flatMap(row => Array.isArray(row.metadata?.breakdown) ? row.metadata.breakdown.map(item => typeof item === 'object' && item && 'service' in item ? String(item.service) : '') : []).filter(Boolean)
     const summary = [reported, provider === 'digitalocean' ? '' : forecasts].filter(Boolean).join(' · ') || (state.status === 'error' ? 'Last sync failed; last known usage may be available in details.' : state.status === 'synced' ? provider === 'digitalocean' ? 'Checked successfully; no finalized invoice total is available.' : 'Checked successfully; no current usage report.' : hasCostReadFailure.value ? 'Usage data could not be loaded; current usage is unavailable.' : state.status === 'not-configured' ? 'Usage not connected; no reported amount.' : 'Usage data is pending.')
     const presentation = providerStatusPresentation({ configured: connectionStatuses.value?.[provider].configured ?? (connectionReadState.value === 'pending' || connectionStatusesError.value && !connectionStatuses.value ? undefined : state.status !== 'not-configured'), syncStatus: state.status, hasObservation: rows.length > 0, stale: isProviderStale(state), readState: connectionReadState.value === 'pending' ? 'pending' : costFeedReadState.value, readAt: costFeedReadAt.value })
-    return { id: provider, name: providerName(provider), status: state.status, presentation, summary: `${summary}${serviceNames.length ? ` · ${serviceNames.join(' ')}` : ''}` }
+    return { id: provider, name: providerName(provider), status: state.status, presentation, lastSyncedAt: state.lastSyncedAt, summary, searchTerms: serviceNames.join(' ') }
   }),
   {
     id: 'hostinger' as const, name: 'Hostinger',
     status: hostingerState.value?.sync.status ?? (hostingerIsConfigured() ? hostingerStateResolved.value ? 'error' : 'pending' : 'not-configured'),
     presentation: providerStatusPresentation({ configured: connectionStatuses.value?.hostinger.configured ?? (connectionReadState.value === 'pending' || connectionStatusesError.value && !connectionStatuses.value ? undefined : hostingerIsConfigured()), syncStatus: hostingerState.value?.sync.status === 'synced' || hostingerState.value?.sync.status === 'error' || hostingerState.value?.sync.status === 'not-configured' ? hostingerState.value.sync.status : undefined, hasObservation: !!hostingerState.value?.subscriptions.length, stale: hostingerFreshness(hostingerState.value?.sync) === 'stale', readState: connectionReadState.value === 'pending' ? 'pending' : hostingerReadState.value, readAt: hostingerReadAt.value }),
+    lastSyncedAt: hostingerState.value?.sync.lastSyncedAt,
     summary: hostingerState.value?.sync.status === 'error' ? 'Latest sync failed; saved subscriptions and previous discoveries are retained.' : hostingerState.value?.sync.status === 'synced' ? `${hostingerState.value.subscriptions.filter(row => row.linkedSubscriptionId).length} linked renewal(s); unlinked discoveries need review.` : hostingerIsConfigured() ? hostingerStateResolved.value ? 'Hostinger discovery could not be loaded; saved subscriptions remain in the inventory.' : 'Hostinger data is pending; saved linked renewals remain in fixed subscriptions.' : 'No Hostinger connection; saved manual renewals remain searchable.',
   },
 ])
@@ -302,6 +303,12 @@ const lastSuccessfulSync = computed(() => [
   hostingerState.value?.sync.lastSyncedAt,
 ].filter((value): value is string => typeof value === 'string').sort().at(-1) ?? null)
 const upcomingCharges = computed(() => nextDistinctRenewals(upcomingRenewals(confirmedSubscriptions.value, today.value, endDate(365))).slice(0, 3))
+const currentMonthEnd = computed(() => {
+  const [year, month] = today.value.split('-').map(Number)
+  return new Date(Date.UTC(year!, month!, 0)).toISOString().slice(0, 10)
+})
+const currentMonthRenewalTotals = computed(() => renewalChargeTotals(upcomingRenewals(confirmedSubscriptions.value, today.value, currentMonthEnd.value)))
+const currentMonthLabel = computed(() => new Intl.DateTimeFormat(undefined, { month: 'long', timeZone: 'UTC' }).format(new Date(`${today.value.slice(0, 7)}-01T00:00:00Z`)))
 const featuredDriverMaximum = computed(() => Math.max(0, ...(featuredInsight.value?.drivers.map(driver => driver.amount) ?? [])))
 function driverWidth(amount: number) { return featuredDriverMaximum.value > 0 ? `${Math.max(4, amount / featuredDriverMaximum.value * 100)}%` : '0%' }
 const hostingerLinkedIds = computed(() => new Set((hostingerState.value?.subscriptions ?? []).map(item => item.linkedSubscriptionId).filter((id): id is string => !!id)))
@@ -533,13 +540,14 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
       <p v-else-if="busy" role="status">Saving your subscriptions…</p>
       <p class="sr-only" role="status" aria-live="polite">{{ notice }}</p>
       <section v-if="loaded" class="tracked-spending overview-snapshot" aria-labelledby="tracked-spending-title">
-        <div class="overview-section-heading"><div><p class="eyebrow">Your spending</p><h2 id="tracked-spending-title">Fixed and metered spending</h2></div><p class="overview-freshness">{{ overviewFreshness }}</p></div>
+        <div class="overview-section-heading"><div><p class="eyebrow">Your spending</p><h2 id="tracked-spending-title">Monthly equivalents and provider costs</h2></div><p class="overview-freshness">{{ overviewFreshness }}</p></div>
+        <p class="overview-explanation">Monthly equivalents average active fixed subscriptions for comparison. Upcoming renewals and provider-reported costs are shown separately; amounts are never combined across currencies.</p>
         <p v-if="meteredWarning" class="feed-warning" role="status">{{ meteredWarning }}</p>
         <div v-if="trackedTotals.length" class="tracked-spending-grid">
           <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card overview-currency-card">
             <p class="overview-currency">{{ total.currency }}</p>
-            <dl class="overview-spend-pair"><div><dt>Subscriptions · monthly average</dt><dd :aria-describedby="`fixed-spend-note-${total.currency}`">{{ money(total.fixedMonthly, total.currency) }}</dd></div><div v-if="showMeteredCurrency(total.currency)"><dt>Cloud usage reported</dt><dd :aria-describedby="`metered-spend-note-${total.currency}`">{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd></div></dl>
-            <p class="overview-spend-note" :id="`fixed-spend-note-${total.currency}`">Comparison rate; the actual charge follows each renewal schedule.</p>
+            <dl class="overview-spend-pair"><div><dt>Active subscriptions · monthly equivalent</dt><dd :aria-describedby="`fixed-spend-note-${total.currency}`">{{ money(total.fixedMonthly, total.currency) }}</dd></div><div v-if="showMeteredCurrency(total.currency)"><dt>Provider-reported costs · current period</dt><dd :aria-describedby="`metered-spend-note-${total.currency}`">{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd></div></dl>
+            <p class="overview-spend-note" :id="`fixed-spend-note-${total.currency}`">Monthly comparison only. Actual fixed charges and dates appear below.</p>
             <p v-if="showMeteredCurrency(total.currency)" class="overview-spend-note" :id="`metered-spend-note-${total.currency}`">{{ actualPeriodLabels[total.currency] ? `Source and period · ${actualPeriodLabels[total.currency]}` : meteredStatus(total.currency) }}</p>
             <dl v-if="total.meteredForecast !== null" class="overview-forecast"><div><dt>Full-month estimate</dt><dd>{{ money(total.meteredForecast, total.currency) }}</dd></div></dl>
           </article>
@@ -551,6 +559,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
         <div class="overview-section-heading"><div><p class="eyebrow">Fixed recurring charges</p><h2 id="next-charges-title">Coming up next</h2></div><div class="overview-section-links"><NuxtLink class="text-button" to="/history#payment-schedule">Full payment schedule</NuxtLink><NuxtLink class="text-button" to="/services">Manage services</NuxtLink></div></div>
         <p v-if="paymentScheduleReadState === 'pending'" class="metric-note" role="status">Checking saved subscriptions and provider coverage; any listed renewals are known saved commitments.</p>
         <p v-else-if="['unavailable', 'expired'].includes(paymentScheduleReadState)" class="metric-note" role="status">Provider or subscription data is unavailable; any listed renewals are known saved commitments and the full schedule is unconfirmed.</p>
+        <div class="current-month-schedule" aria-labelledby="current-month-schedule-title"><div><h3 id="current-month-schedule-title">Scheduled fixed charges left in {{ currentMonthLabel }}</h3><p>Upcoming renewal amounts only; excludes provider usage and charges dated earlier this month.</p></div><ul v-if="currentMonthRenewalTotals.length"><li v-for="total in currentMonthRenewalTotals" :key="total.currency"><span>{{ total.currency }}</span><strong>{{ money(total.amount, total.currency) }}</strong></li></ul><p v-else-if="['available', 'empty'].includes(paymentScheduleReadState)" class="current-month-empty">No active fixed renewals remain this month.</p><p v-else class="current-month-empty" role="status">This month’s schedule is not fully confirmed.</p></div>
         <ul v-if="upcomingCharges.length" class="overview-renewal-list"><li v-for="charge in upcomingCharges" :key="`${charge.subscription.id}-${charge.date}`"><button class="overview-renewal-name service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: charge.subscription.id }, $event)">{{ charge.subscription.name }}<span>{{ charge.subscription.provider || 'Fixed subscription' }}</span></button><span class="overview-renewal-date">{{ dateLabel(charge.date) }}</span><strong class="overview-renewal-amount">{{ money(charge.amount, charge.currency) }}</strong></li></ul>
         <p v-else-if="paymentScheduleReadState === 'pending'" class="quiet-empty" role="status">The upcoming schedule is still loading.</p>
         <p v-else-if="['unavailable', 'expired'].includes(paymentScheduleReadState)" class="quiet-empty" role="status">Upcoming renewals could not be fully confirmed because saved subscription or provider data is unavailable.</p>

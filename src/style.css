@@ -101,6 +101,15 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .overview-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; }
 .overview-section-links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .75rem; }
 .overview-section-heading h2 { font-size: 1.45rem; }
+.overview-explanation { max-width: 70ch; margin: -.25rem 0 1rem; color: var(--muted); font-size: .9rem; line-height: 1.5; }
+.current-month-schedule { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem 1.5rem; margin: 0 0 1rem; padding: 1rem; border: 1px solid var(--line); background: var(--surface); }
+.current-month-schedule h3 { margin: 0; font-size: 1rem; }
+.current-month-schedule p { margin: .35rem 0 0; color: var(--muted); font-size: .85rem; line-height: 1.45; }
+.current-month-schedule ul { display: flex; flex-wrap: wrap; gap: .5rem .75rem; margin: 0; padding: 0; list-style: none; }
+.current-month-schedule li { display: flex; gap: .5rem; align-items: baseline; padding: .5rem .75rem; border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.current-month-schedule li span { color: var(--muted); font-size: .8rem; }
+.current-month-schedule li strong { font: 600 1.1rem var(--mono); }
+.current-month-schedule .current-month-empty { max-width: 30ch; }
 .overview-freshness { color: var(--muted); font-size: .75rem; }
 .overview-currency-card { padding: 1.1rem 1.25rem; border-top: 3px solid var(--accent); }
 .overview-currency { color: var(--muted); font-size: .75rem; font-weight: 600; letter-spacing: .12em; }
@@ -346,7 +355,9 @@ tbody tr:last-child > * { border-bottom: 0; }
 .connection-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
 .connection-card { padding: 1.25rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); min-width: 0; }
 .connection-card header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; }
+.connection-card header>div { min-width: 0; }
 .connection-card h3 { font-size: 1rem; }
+.connection-last-refresh { margin: -.4rem 0 .35rem; color: var(--muted); font-size: .75rem; line-height: 1.4; }
 .connection-card > p { margin: .75rem 0; font-size: .875rem; color: var(--muted); }
 .catalog-tools { display: flex; flex-wrap: wrap; align-items: end; gap: .75rem; margin: 0 0 1rem; }
 .catalog-tools label { display: grid; gap: .3rem; min-width: min(100%, 220px); font-size: .875rem; font-weight: 600; }
