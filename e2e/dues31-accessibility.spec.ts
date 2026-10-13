@@ -100,6 +100,7 @@ for (const route of routes) for (const width of widths) {
       expect(measurement.horizontalOverflow, `${route.name} should reflow at ${width}px`).toBeLessThanOrEqual(0)
       expect(measurement.tinyText, `${route.name} has text below the 12px dense-note floor`).toEqual([])
       expect(measurement.lowContrast, `${route.name} has text below WCAG AA normal-text contrast`).toEqual([])
+      expect(measurement.shortControls, `${route.name} has interactive targets below 44×44px at ${width}px`).toEqual([])
     }
   })
 }
@@ -120,6 +121,7 @@ for (const route of routes) {
       expect(measurement.horizontalOverflow, `${route.name} should reflow at 200%-equivalent width`).toBeLessThanOrEqual(0)
       expect(measurement.tinyText).toEqual([])
       expect(measurement.lowContrast).toEqual([])
+      expect(measurement.shortControls, `${route.name} has interactive targets below 44×44px at 640px`).toEqual([])
     }
   })
 }

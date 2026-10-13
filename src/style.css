@@ -41,6 +41,7 @@ summary { min-height: 44px; }
 .sidebar-note strong { font-weight: 600; }
 .sidebar-note p { margin-top: .5rem; color: var(--muted); line-height: 1.7; }
 .connection-next-step { margin-top: .75rem; color: var(--green); font-size: .75rem; }
+.connection-card a, .provider-setup a, .legacy-import a { display: inline-flex; align-items: center; min-height: 44px; vertical-align: middle; }
 .local-indicator { display: inline-block; width: .45rem; height: .45rem; border-radius: 50%; background: var(--green); margin-right: .45rem; }
 main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; margin-bottom: 2.5rem; }
@@ -76,6 +77,7 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .service-detail-trigger { display: inline-grid; justify-items: start; gap: .15rem; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
 .service-detail-trigger:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .15em; }
 .service-detail-trigger:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 2px; }
+.service-detail-trigger { min-width: 44px; min-height: 44px; }
 .provider-overview-card h3 .service-detail-trigger { width: 100%; }
 .connection-card header .service-detail-trigger,.provider-panel header .service-detail-trigger { font-weight: 600; }
 .provider-overview-card h3 .metric-note { display: block; font-weight: 400; }
@@ -213,7 +215,7 @@ tbody th { font-weight: 500; white-space: normal; min-width: 180px; max-width: 2
 tbody tr:last-child > * { border-bottom: 0; }
 .cell-note { display: block; color: var(--muted); font-weight: 400; font-size: .75rem; margin-top: .3rem; }
 .row-actions { display: flex; gap: .75rem; }
-.row-actions .text-button { font-size: .75rem; }
+.row-actions .text-button { min-width: 44px; font-size: .75rem; }
 .no-results { padding: 2rem; text-align: center; color: var(--muted); }
 .subscriptions-empty { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .subscriptions-empty h3 { font: 400 1.35rem var(--display); margin-bottom: .4rem; }
@@ -266,7 +268,7 @@ tbody tr:last-child > * { border-bottom: 0; }
   .brand-mark { width: 1.75rem; height: 1.75rem; }
   .workspace-label, .sidebar-note { display: none; }
   nav { margin-left: auto; flex-direction: row; gap: .3rem; }
-  nav a { min-height: 42px; font-size: .75rem; padding: .5rem; gap: .35rem; }
+  nav a { min-height: 44px; font-size: .75rem; padding: .5rem; gap: .35rem; }
   main { padding: 2rem 1.5rem 1.5rem; }
   .page-header { margin-bottom: 2rem; }
   h1 { font-size: 3rem; }
