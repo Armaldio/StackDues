@@ -11,12 +11,14 @@ import { persistSupabaseTelemetry, readSupabaseTelemetry } from '../../server/pr
 // Local fixture uses only fake credentials and is never imported by production.
 export default {
   async fetch(request: Request, env: { DB: D1Database }): Promise<Response> {
-    const { action, provider, credentials, revision, key, sql, observations, organizationSlug } = await request.json() as any
+    const { action, provider, credentials, revision, key, sql, observations, organizationSlug, capturedAt } = await request.json() as any
     try {
       if (action === 'initialize') { for (const sql of [ledgerMigration, migration]) await env.DB.exec(sql.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ')); return Response.json({ ready: true }) }
       if (action === 'extend') { for (const migration of [extensionMigration, digitalOceanMigration, supabaseMigration]) await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ')); return Response.json({ ready: true }) }
       if (action === 'list') return Response.json(await listProviderConnections(env.DB))
-      if (action === 'telemetry') { await persistSupabaseTelemetry(env.DB, observations); return Response.json(await readSupabaseTelemetry(env.DB, organizationSlug)) }
+      if (action === 'telemetry') { await persistSupabaseTelemetry(env.DB, organizationSlug, capturedAt ?? observations[0]?.capturedAt ?? '2026-10-13T12:00:00.000Z', observations); return Response.json(await readSupabaseTelemetry(env.DB, organizationSlug)) }
+      if (action === 'telemetry-read') return Response.json(await readSupabaseTelemetry(env.DB, organizationSlug))
+      if (action === 'telemetry-history-count') return Response.json(await env.DB.prepare('SELECT COUNT(*) AS count FROM supabase_usage_observations WHERE organization_slug = ?').bind(organizationSlug).first())
       if (action === 'costs') return Response.json(await readCostFeed(env.DB))
       if (action === 'save') return Response.json(await saveProviderCredentials(env.DB, provider, credentials, revision, key))
       if (action === 'load') return Response.json(await loadProviderCredentials(env.DB, provider, key))

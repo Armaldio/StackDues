@@ -72,12 +72,14 @@ test('credential encryption, guarded writes and failure handling run in real wor
       await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [{ id: 'telemetry-1', organizationSlug: supabase.organizationSlug, projectRef: 'abcdefghijklmnopqrst', projectName: 'App', interval: '1day', observedAt: '2026-10-12T00:00:00Z', capturedAt: '2026-10-13T12:00:00.000Z', authRequests: 12, realtimeRequests: 3, restRequests: 45, storageRequests: 6 }] })
       const costsAfterTelemetry = await call('costs')
       assert.deepEqual(costsAfterTelemetry, financialFeedBeforeTelemetry, 'request telemetry never enters or changes the financial cost feed')
-      const telemetry = await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [] })
+      const telemetry = await call('telemetry-read', { organizationSlug: supabase.organizationSlug })
       assert.equal(telemetry.length, 1)
       assert.equal(telemetry[0].restRequests, 45)
       await call('sql', { sql: "UPDATE supabase_usage_observations SET rest_requests = 0 WHERE id = 'telemetry-1';" }, 500)
       await call('sql', { sql: "DELETE FROM supabase_usage_observations WHERE id = 'telemetry-1';" }, 500)
-      assert.equal((await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [] }))[0].restRequests, 45)
+      assert.equal((await call('telemetry-read', { organizationSlug: supabase.organizationSlug }))[0].restRequests, 45)
+      assert.deepEqual(await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [], capturedAt: '2026-10-14T12:00:00.000Z' }), [], 'a successful empty capture removes removed projects from current results')
+      assert.equal((await call('telemetry-history-count', { organizationSlug: supabase.organizationSlug })).count, 1, 'removed project observations remain in append-only history')
     })
     await t.test('wrong, malformed and missing keys fail without destroying saved credentials', async () => {
       for (const invalid of [undefined, '', 'short', 'g'.repeat(64), 'b'.repeat(64)]) {

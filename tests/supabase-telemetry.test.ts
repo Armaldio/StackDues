@@ -48,6 +48,35 @@ test('malformed counts and upstream failures fail closed without returning the t
   }
 })
 
+test('project pagination visits every page and rejects invalid pagination metadata', async () => {
+  const requestedOffsets: string[] = []
+  const projects = Array.from({ length: 101 }, (_, index) => ({ ref: String(index).padStart(20, '0'), name: `Project ${index}` }))
+  const observations = await collectSupabaseTelemetry(credentials, now, { fetch: async input => {
+    const url = new URL(String(input))
+    if (url.pathname.endsWith('/projects')) {
+      const offset = Number(url.searchParams.get('offset'))
+      requestedOffsets.push(String(offset))
+      return response({ projects: projects.slice(offset, offset + 100), pagination: { count: 101, limit: 100, offset } })
+    }
+    return response({ result: [], error: null })
+  } })
+  assert.deepEqual(requestedOffsets, ['0', '100'])
+  assert.equal(observations.length, 0)
+
+  for (const pagination of [
+    { count: -1, limit: 100, offset: 0 },
+    { count: 1, limit: 0, offset: 0 },
+    { count: 1, limit: 99, offset: 0 },
+    { count: 1, limit: 100, offset: 1 },
+    { count: 1, limit: 100, offset: 0 },
+  ]) {
+    await assert.rejects(() => collectSupabaseTelemetry(credentials, now, { fetch: async input => {
+      if (new URL(String(input)).pathname.endsWith('/projects')) return response({ projects: projects.slice(0, 2), pagination })
+      return response({ result: [], error: null })
+    } }))
+  }
+})
+
 test('request-count telemetry has no provider slot in the financial cost feed', () => {
   const feed = emptyCostFeed()
   assert.deepEqual(Object.keys(feed.providers).sort(), ['aws', 'cloudflare', 'digitalocean', 'openai'])

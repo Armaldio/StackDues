@@ -9,7 +9,9 @@ export default defineEventHandler(event => ledgerEndpoint(event, async db => {
   const env = event.context.cloudflare?.env as { CREDENTIALS_KEY?: string } | undefined
   const credentials = await loadProviderCredentials(db, 'supabase', env?.CREDENTIALS_KEY)
   if (!credentials) throw new LedgerError(409, 'Connect Supabase before checking telemetry.')
-  const observations = await collectSupabaseTelemetry(credentials)
-  await persistSupabaseTelemetry(db, observations)
+  const captureTime = new Date()
+  const observations = await collectSupabaseTelemetry(credentials, captureTime)
+  const capturedAt = captureTime.toISOString()
+  await persistSupabaseTelemetry(db, credentials.organizationSlug, capturedAt, observations)
   return { configured: true, status, observations: await readSupabaseTelemetry(db, credentials.organizationSlug) }
 }))

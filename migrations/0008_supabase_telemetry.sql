@@ -35,3 +35,13 @@ CREATE TRIGGER supabase_usage_update BEFORE UPDATE ON supabase_usage_observation
 BEGIN SELECT RAISE(ABORT, 'immutable_supabase_observation'); END;
 CREATE TRIGGER supabase_usage_delete BEFORE DELETE ON supabase_usage_observations
 BEGIN SELECT RAISE(ABORT, 'immutable_supabase_observation'); END;
+
+CREATE TABLE supabase_usage_captures (
+  organization_slug TEXT NOT NULL CHECK (length(organization_slug) BETWEEN 1 AND 128),
+  captured_at TEXT NOT NULL,
+  PRIMARY KEY (organization_slug, captured_at)
+);
+CREATE TRIGGER supabase_capture_update BEFORE UPDATE ON supabase_usage_captures
+BEGIN SELECT RAISE(ABORT, 'immutable_supabase_capture'); END;
+CREATE TRIGGER supabase_capture_delete BEFORE DELETE ON supabase_usage_captures
+BEGIN SELECT RAISE(ABORT, 'immutable_supabase_capture'); END;

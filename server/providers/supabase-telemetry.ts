@@ -44,6 +44,7 @@ async function requestJson(url: URL, token: string, fetcher: typeof fetch, timeo
 async function listProjects(credentials: SupabaseCredentials, fetcher: typeof fetch, timeoutMs: number): Promise<Project[]> {
   const projects: Project[] = []
   let offset = 0
+  let total: number | undefined
   for (;;) {
     const url = new URL(`${endpoint}/organizations/${encodeURIComponent(credentials.organizationSlug)}/projects`)
     url.searchParams.set('limit', '100')
@@ -51,15 +52,17 @@ async function listProjects(credentials: SupabaseCredentials, fetcher: typeof fe
     const payload = record(await requestJson(url, credentials.apiToken, fetcher, timeoutMs))
     const data = payload?.projects
     const pagination = record(payload?.pagination)
-    if (!Array.isArray(data) || !pagination || !Number.isSafeInteger(pagination.count) || !Number.isSafeInteger(pagination.limit) || !Number.isSafeInteger(pagination.offset)) throw new Error('Supabase project response was invalid')
+    if (!Array.isArray(data) || !pagination || !Number.isSafeInteger(pagination.count) || Number(pagination.count) < 0 || pagination.limit !== 100 || !Number.isSafeInteger(pagination.offset) || Number(pagination.offset) !== offset || data.length > 100 || offset + data.length > Number(pagination.count)) throw new Error('Supabase project response was invalid')
+    if (total !== undefined && Number(pagination.count) !== total) throw new Error('Supabase project response was invalid')
+    total = Number(pagination.count)
     for (const item of data) {
       const row = record(item)
-      if (!row || typeof row.ref !== 'string' || !/^[a-z]{20}$/.test(row.ref) || typeof row.name !== 'string' || !row.name.trim() || row.name.length > 256) throw new Error('Supabase project response was invalid')
+      if (!row || typeof row.ref !== 'string' || !/^[a-z0-9]{20}$/.test(row.ref) || typeof row.name !== 'string' || !row.name.trim() || row.name.length > 256 || projects.some(project => project.ref === row.ref)) throw new Error('Supabase project response was invalid')
       projects.push({ ref: row.ref, name: row.name.trim() })
     }
-    if (Number(pagination.offset) !== offset) throw new Error('Supabase project response was invalid')
-    if (offset + data.length >= Number(pagination.count)) break
-    const nextOffset = offset + Number(pagination.limit)
+    if (offset + data.length >= total) break
+    if (data.length !== 100) throw new Error('Supabase project response was invalid')
+    const nextOffset = offset + 100
     if (!data.length || nextOffset <= offset || nextOffset >= 10000) throw new Error('Supabase organization contains too many projects to sync safely')
     offset = nextOffset
   }
@@ -114,20 +117,21 @@ function fromRow(row: Record<string, unknown>): SupabaseUsageObservation {
 export async function readSupabaseTelemetry(db: D1Database, organizationSlug?: string): Promise<SupabaseUsageObservation[]> {
   try {
     const query = organizationSlug
-      ? db.prepare(`SELECT * FROM supabase_usage_observations WHERE organization_slug = ? AND captured_at = (SELECT MAX(latest.captured_at) FROM supabase_usage_observations AS latest WHERE latest.organization_slug = supabase_usage_observations.organization_slug AND latest.project_ref = supabase_usage_observations.project_ref) ORDER BY project_name, observed_at LIMIT 10000`).bind(organizationSlug)
-      : db.prepare(`SELECT * FROM supabase_usage_observations WHERE captured_at = (SELECT MAX(latest.captured_at) FROM supabase_usage_observations AS latest WHERE latest.organization_slug = supabase_usage_observations.organization_slug AND latest.project_ref = supabase_usage_observations.project_ref) ORDER BY project_name, observed_at LIMIT 10000`)
+      ? db.prepare(`SELECT observation.* FROM supabase_usage_observations AS observation JOIN supabase_usage_captures AS capture ON capture.organization_slug = observation.organization_slug AND capture.captured_at = observation.captured_at WHERE observation.organization_slug = ? AND capture.captured_at = (SELECT MAX(latest.captured_at) FROM supabase_usage_captures AS latest WHERE latest.organization_slug = capture.organization_slug) ORDER BY observation.project_name, observation.observed_at LIMIT 10000`).bind(organizationSlug)
+      : db.prepare(`SELECT observation.* FROM supabase_usage_observations AS observation JOIN supabase_usage_captures AS capture ON capture.organization_slug = observation.organization_slug AND capture.captured_at = observation.captured_at WHERE capture.captured_at = (SELECT MAX(latest.captured_at) FROM supabase_usage_captures AS latest WHERE latest.organization_slug = capture.organization_slug) ORDER BY observation.project_name, observation.observed_at LIMIT 10000`)
     const result = await query.all<Record<string, unknown>>()
     return result.results.map(fromRow)
   } catch { throw new LedgerError(503, 'Supabase telemetry storage is unavailable. Try again later.') }
 }
 
-export async function persistSupabaseTelemetry(db: D1Database, observations: readonly SupabaseUsageObservation[]): Promise<void> {
+export async function persistSupabaseTelemetry(db: D1Database, organizationSlug: string, capturedAt: string, observations: readonly SupabaseUsageObservation[]): Promise<void> {
   try {
+    const statements = [db.prepare('INSERT INTO supabase_usage_captures (organization_slug, captured_at) VALUES (?, ?)').bind(organizationSlug, capturedAt)]
     for (let index = 0; index < observations.length; index += 100) {
-      const batch = observations.slice(index, index + 100).map(row => db.prepare(`INSERT INTO supabase_usage_observations (id, organization_slug, project_ref, project_name, interval, observed_at, captured_at, auth_requests, realtime_requests, rest_requests, storage_requests) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      statements.push(...observations.slice(index, index + 100).map(row => db.prepare(`INSERT INTO supabase_usage_observations (id, organization_slug, project_ref, project_name, interval, observed_at, captured_at, auth_requests, realtime_requests, rest_requests, storage_requests) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
         row.id, row.organizationSlug, row.projectRef, row.projectName, row.interval, row.observedAt, row.capturedAt, row.authRequests, row.realtimeRequests, row.restRequests, row.storageRequests,
-      ))
-      if (batch.length) await db.batch(batch)
+      )))
     }
+    await db.batch(statements)
   } catch { throw new LedgerError(503, 'Supabase telemetry could not be saved. Previous data is retained. Try again later.') }
 }
