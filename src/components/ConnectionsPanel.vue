@@ -7,6 +7,7 @@ import type { HostingerDiscovery } from '../lib/hostinger-api'
 import { currentCostSnapshots, isProviderStale } from '../lib/cost-feed'
 import { hostingerFreshness } from '../domain/hostinger-coverage'
 import { providerStatusPresentation } from '../domain/provider-presentation'
+import SupabaseTelemetryPanel from './SupabaseTelemetryPanel.vue'
 const props = defineProps<{ costFeed: CostFeed; hostinger?: HostingerDiscovery; initialStatuses?: ConnectionStatuses }>()
 const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses]; details: [provider: ConnectionProvider | 'github'] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger']
@@ -34,13 +35,13 @@ const setupGuidance: Record<ConnectionProvider, { instruction: string; docs: str
 }
 const plannedProviders = [
   { name: 'GitHub', coverage: 'Personal billing usage; currency and payer details are not exposed by the current API, so money totals are not available yet', setup: 'Enhanced billing access may be required' },
-  { name: 'Supabase', coverage: 'A Supabase billing and project-usage connection has not been implemented yet', setup: 'No Supabase credentials are collected by StackDues' , status: 'Not available yet' },
 ]
 const search = ref('')
 const availability = ref<'all' | 'available' | 'coming-soon'>('all')
 function matches(text: string) { return text.toLowerCase().includes(search.value.trim().toLowerCase()) }
 const visibleProviders = computed(() => availability.value === 'coming-soon' ? [] : providers.filter(provider => matches(`${names[provider]} ${coverage[provider]} ${permissions[provider]}`)))
 const visiblePlannedProviders = computed(() => availability.value === 'available' ? [] : plannedProviders.filter(provider => matches(`${provider.name} ${provider.coverage} ${provider.setup}`)))
+const showSupabase = computed(() => availability.value !== 'coming-soon' && matches('Supabase project request counters telemetry usage'))
 const statuses = ref<ConnectionStatuses | undefined>(props.initialStatuses ? { ...props.initialStatuses } : undefined)
 const loading = ref(false)
 const busy = ref<ConnectionProvider>()
@@ -184,6 +185,7 @@ onUnmounted(() => providers.forEach(clear))
         <p v-if="!lastRefresh(provider) && refreshStatus(provider) !== 'error' && statuses?.[provider].updatedAt" class="metric-note">Credentials saved · {{ formatTime(statuses[provider].updatedAt!) }}. No successful billing sync yet.</p>
       </article>
     </div>
+    <div v-if="showSupabase" class="connection-grid supabase-telemetry-grid"><SupabaseTelemetryPanel /></div>
     <div v-if="visiblePlannedProviders.length" class="connection-grid planned-grid" aria-label="Coming soon providers">
       <article v-for="provider in visiblePlannedProviders" :key="provider.name" class="connection-card coming-soon-card">
         <header><h3 v-if="provider.name === 'GitHub'"><button class="service-detail-trigger" type="button" @click="emit('details', 'github')">{{ provider.name }}</button></h3><h3 v-else>{{ provider.name }}</h3><span class="status-pill planned-pill">{{ 'status' in provider ? provider.status : 'Coming soon' }}</span></header>

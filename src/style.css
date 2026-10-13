@@ -373,6 +373,18 @@ tbody tr:last-child > * { border-bottom: 0; }
 .connection-editor .primary-button { width: 100%; font-size: .875rem; padding: .65rem; }
 .connection-notice { color: var(--green); font-size: .85rem; margin-bottom: 1rem; }
 .provider-refresh-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.supabase-telemetry-grid { margin-top: 1rem; }
+.supabase-telemetry-card { grid-column: 1 / -1; }
+.supabase-telemetry-card form label { display: block; margin: .75rem 0; font-size: .85rem; }
+.supabase-telemetry-card form input { display: block; width: 100%; margin-top: .35rem; padding: .6rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: var(--ink); }
+.supabase-telemetry-card form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.supabase-project-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: .75rem; margin: .75rem 0 1rem; }
+.supabase-project-row { min-width: 0; padding: .85rem; border: 1px solid var(--line); background: var(--bg); }
+.supabase-project-row h4 { margin: 0; font-size: .9rem; }
+.supabase-project-row dl { margin: .5rem 0 0; }
+.supabase-project-row dl div { display: flex; justify-content: space-between; gap: .5rem; padding: .25rem 0; border-bottom: 1px solid var(--line); font-size: .75rem; }
+.supabase-project-row dt { color: var(--muted); }
+.supabase-project-row dd { margin: 0; font-variant-numeric: tabular-nums; }
 .refresh-description { margin: -1rem 0 1.25rem; }
 .hostinger-discovery { margin: 1.5rem 0 2.5rem; scroll-margin-top: 2rem; }
 .hostinger-service-list { display: grid; gap: .75rem; }

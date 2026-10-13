@@ -6,6 +6,8 @@ async function mockProviders(page: Page) {
   await page.route('**/api/costs', route => route.fulfill({ json: { snapshots: [], providers: Object.fromEntries(['aws', 'cloudflare', 'openai', 'digitalocean'].map(provider => [provider, { status: 'not-configured' }])) } }))
   await page.route('**/api/subscriptions**', route => route.fulfill({ json: [] }))
   await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [], sync: { status: 'not-configured' } } }))
+  await page.route('**/api/supabase/connection', route => route.fulfill({ json: { configured: false, revision: 0 } }))
+  await page.route('**/api/supabase/usage', route => route.fulfill({ json: { configured: false, status: { configured: false, revision: 0 }, observations: [] } }))
 }
 
 test('DUES-32 provider credential guidance is actionable and fits common viewport widths', async ({ page }) => {
@@ -14,7 +16,12 @@ test('DUES-32 provider credential guidance is actionable and fits common viewpor
   await page.goto('/connections')
 
   const cards = page.locator('.connection-card:not(.coming-soon-card)')
-  await expect(cards).toHaveCount(5)
+  await expect(cards).toHaveCount(6)
+  const supabase = cards.filter({ has: page.getByRole('heading', { name: 'Supabase', exact: true }) })
+  await expect(supabase).toContainText('Telemetry only; no billable amounts')
+  await expect(supabase).toContainText('Invoices: Not imported')
+  await expect(supabase).toContainText('organization_projects_read')
+  await expect(supabase).toContainText('analytics_usage_read')
   const guidance = [
     ['Amazon Web Services', 'dedicated IAM principal', 'ce:GetCostAndUsage', 'Cost Explorer API permissions', 'https://docs.aws.amazon.com/cost-management/latest/userguide/ce-api.html'],
     ['Cloudflare', 'Account → Billing → Read', 'billing permissions', 'https://developers.cloudflare.com/billing/understand/billing-permissions/'],
@@ -57,16 +64,13 @@ test('DUES-32 provider credential guidance is actionable and fits common viewpor
 test('DUES-32 provider catalog search and availability filters remain accurate', async ({ page }) => {
   await mockProviders(page)
   await page.goto('/connections')
-  await expect(page.locator('.connection-card:not(.coming-soon-card)')).toHaveCount(5)
+  await expect(page.locator('.connection-card:not(.coming-soon-card)')).toHaveCount(6)
   await page.getByLabel('Search providers').fill('billing:read')
   await expect(page.locator('.connection-card:not(.coming-soon-card)')).toHaveCount(1)
   await expect(page.getByRole('heading', { name: 'DigitalOcean' })).toBeVisible()
   await page.getByLabel('Search providers').fill('')
   await page.getByLabel('Provider availability').selectOption('coming-soon')
   await expect(page.getByRole('heading', { name: 'GitHub' })).toBeVisible()
-  const supabase = page.locator('.coming-soon-card').filter({ has: page.getByRole('heading', { name: 'Supabase' }) })
-  await expect(supabase).toContainText('Not available yet')
-  await expect(supabase).toContainText('has not been implemented yet')
-  await expect(supabase).toContainText('No Supabase credentials are collected')
+  await expect(page.getByRole('heading', { name: 'Supabase', exact: true })).toHaveCount(0)
   await expect(page.locator('.connection-card:not(.coming-soon-card)')).toHaveCount(0)
 })

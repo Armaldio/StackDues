@@ -62,6 +62,22 @@ test('credential encryption, guarded writes and failure handling run in real wor
       assert.deepEqual(await call('load', { provider: 'digitalocean', key }), digitalocean)
       const digitaloceanRow = await call('inspect', { provider: 'digitalocean' })
       assert.ok(!JSON.stringify(digitaloceanRow).includes(digitalocean.apiToken))
+      const supabase = { apiToken: 'TEST_SUPABASE_SCOPED_PAT', organizationSlug: 'team-stackdues' }
+      await call('save', { provider: 'supabase', credentials: supabase, revision: 0, key })
+      assert.deepEqual(await call('load', { provider: 'supabase', key }), supabase)
+      const supabaseRow = await call('inspect', { provider: 'supabase' })
+      assert.ok(!JSON.stringify(supabaseRow).includes(supabase.apiToken))
+      assert.ok(!JSON.stringify(await call('list')).includes(supabase.apiToken))
+      const financialFeedBeforeTelemetry = await call('costs')
+      await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [{ id: 'telemetry-1', organizationSlug: supabase.organizationSlug, projectRef: 'abcdefghijklmnopqrst', projectName: 'App', interval: '1day', observedAt: '2026-10-12T00:00:00Z', capturedAt: '2026-10-13T12:00:00.000Z', authRequests: 12, realtimeRequests: 3, restRequests: 45, storageRequests: 6 }] })
+      const costsAfterTelemetry = await call('costs')
+      assert.deepEqual(costsAfterTelemetry, financialFeedBeforeTelemetry, 'request telemetry never enters or changes the financial cost feed')
+      const telemetry = await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [] })
+      assert.equal(telemetry.length, 1)
+      assert.equal(telemetry[0].restRequests, 45)
+      await call('sql', { sql: "UPDATE supabase_usage_observations SET rest_requests = 0 WHERE id = 'telemetry-1';" }, 500)
+      await call('sql', { sql: "DELETE FROM supabase_usage_observations WHERE id = 'telemetry-1';" }, 500)
+      assert.equal((await call('telemetry', { organizationSlug: supabase.organizationSlug, observations: [] }))[0].restRequests, 45)
     })
     await t.test('wrong, malformed and missing keys fail without destroying saved credentials', async () => {
       for (const invalid of [undefined, '', 'short', 'g'.repeat(64), 'b'.repeat(64)]) {

@@ -18,7 +18,7 @@ export default {
   async fetch(request: Request, env: WorkerBindings, context: ExecutionContext): Promise<Response> {
     const authResponse = await authGate(request, env)
     if (authResponse) return authResponse
-    if (request.method === 'POST' && ['/api/costs/refresh', '/api/hostinger/subscriptions/sync'].includes(new URL(request.url).pathname)) {
+    if (request.method === 'POST' && ['/api/costs/refresh', '/api/hostinger/subscriptions/sync', '/api/supabase/usage/refresh'].includes(new URL(request.url).pathname)) {
       const limit = await env.COST_REFRESH_RATE_LIMIT.limit({ key: 'owner-cost-refresh' })
       if (!limit.success) return new Response('Please wait before refreshing providers again.', { status: 429, headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' } })
     }

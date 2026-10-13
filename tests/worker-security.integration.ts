@@ -29,12 +29,13 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.equal((await document('/')).status, 303)
     for (const path of ['/services', '/services/', '/connections', '/history']) assert.equal((await document(path)).status, 303, path)
     assert.equal((await document('/unknown-route')).status, 401)
-    for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
+    for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/api/supabase/connection', '/api/supabase/usage', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
     for (const [method, path] of [
       ['POST', '/api/subscriptions?import=1'],
       ['PATCH', '/api/subscriptions/bitwarden?revision=1'],
       ['DELETE', '/api/subscriptions/bitwarden?revision=1'],
       ['POST', '/api/connections/aws?replace=1'],
+      ['POST', '/api/supabase/usage/refresh'],
     ]) assert.equal((await request(path, { method, headers: { Origin: base } })).status, 401, `${method} ${path}`)
     assert.match(await (await request('/register')).text(), /One-time setup code/)
     assert.equal((await post('/auth/register', {}, 'https://foreign.example')).status, 403)
