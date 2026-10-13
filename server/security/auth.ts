@@ -93,13 +93,20 @@ export async function verifySession(
   try {
     const { payload } = await jwtVerify(token, bytes(config.sessionSecret), {
       algorithms: ['HS256'], issuer, audience, subject: config.ownerEmail,
-      requiredClaims: ['exp', 'iat', 'sub', 'version', 'jti'], currentDate: now,
+      requiredClaims: ['exp', 'iat', 'sub', 'version'], currentDate: now,
     })
     if (payload.aud !== audience || typeof payload.iat !== 'number' || typeof payload.exp !== 'number'
       || payload.iat > Math.floor(now.getTime() / 1000) || payload.exp - payload.iat !== SESSION_MAX_AGE
-      || typeof payload.jti !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.jti)
       || payload.version !== await credentialVersion(config.passwordHash)) return null
-    return { email: config.ownerEmail, sessionId: payload.jti }
+    let sessionId: string
+    if (payload.jti === undefined) {
+      // Pre-jti sessions remain valid; hash the exact signed token for stable, per-token logout revocation.
+      sessionId = `legacy:${hex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(token))))}`
+    } else {
+      if (typeof payload.jti !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.jti)) return null
+      sessionId = payload.jti
+    }
+    return { email: config.ownerEmail, sessionId }
   } catch {
     return null
   }

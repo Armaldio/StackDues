@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
+import { SignJWT } from 'jose'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -50,6 +51,16 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.match(setCookie, /__Host-stackdues_session=/); assert.match(setCookie, /Secure; HttpOnly; SameSite=Strict/)
     assert.match(setCookie, /Path=\//); assert.match(setCookie, /Max-Age=28800/)
     const cookie = setCookie.split(';')[0]!
+    // Model a production token issued before jti was added, signed with the same owner credential version.
+    const currentPayload = JSON.parse(Buffer.from(cookie.slice(cookie.indexOf('=') + 1).split('.')[1]!, 'base64url').toString())
+    delete currentPayload.jti
+    const legacyToken = await new SignJWT(currentPayload).setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+      .sign(Uint8Array.from('a'.repeat(64).match(/../g)!, byte => parseInt(byte, 16)))
+    const legacyCookie = `__Host-stackdues_session=${legacyToken}`
+    assert.equal((await request('/api/costs', { headers: { Cookie: legacyCookie } })).status, 200)
+    const legacyLogout = await request('/auth/logout', { method: 'POST', headers: { Cookie: legacyCookie, Origin: base } })
+    assert.equal(legacyLogout.status, 303)
+    assert.equal((await request('/api/costs', { headers: { Cookie: legacyCookie } })).status, 401)
     const dashboard = await request('/', { headers: { Cookie: cookie } })
     assert.equal(dashboard.status, 200)
     assert.match(await dashboard.text(), /StackDues/)

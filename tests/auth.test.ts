@@ -50,6 +50,20 @@ test('owner sessions expire after eight hours and return only the owner identity
   assert.equal(await verifySession(token, config, new Date(now.getTime() + SESSION_MAX_AGE * 1000)), null)
 })
 
+test('pre-jti sessions remain valid and receive a stable exact-token revocation id', async () => {
+  const current = await createSession(config, now)
+  assert.ok(current)
+  const legacyPayload = JSON.parse(Buffer.from(current.split('.')[1]!, 'base64url').toString())
+  delete legacyPayload.jti
+  const key = Uint8Array.from(config.sessionSecret.match(/../g)!, byte => parseInt(byte, 16))
+  const legacy = await new SignJWT(legacyPayload).setProtectedHeader({ alg: 'HS256', typ: 'JWT' }).sign(key)
+  const first = await verifySession(legacy, config, now)
+  const second = await verifySession(legacy, config, now)
+  assert.equal(first?.email, config.ownerEmail)
+  assert.match(first?.sessionId ?? '', /^legacy:[a-f\d]{64}$/)
+  assert.equal(second?.sessionId, first?.sessionId)
+})
+
 test('sessions reject tampering, wrong signing keys and absent tokens', async () => {
   const token = await createSession(config, now)
   assert.ok(token)
@@ -88,7 +102,7 @@ test('signed sessions still require the exact owner, issuer, audience, expiry an
   const original = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())
   const key = Uint8Array.from(config.sessionSecret.match(/../g)!, byte => parseInt(byte, 16))
   for (const overrides of [{ sub: 'attacker@example.com' }, { iss: 'https://attacker.example' },
-    { aud: 'other-app' }, { aud: ['stackdues', 'other-app'] }, { exp: undefined }, { version: undefined }, { jti: undefined },
+    { aud: 'other-app' }, { aud: ['stackdues', 'other-app'] }, { exp: undefined }, { version: undefined },
     { iat: undefined }, { iat: Math.floor(now.getTime() / 1000) + 60 }]) {
     const forged = await new SignJWT({ ...original, ...overrides }).setProtectedHeader({ alg: 'HS256' }).sign(key)
     assert.equal(await verifySession(forged, config, now), null)
