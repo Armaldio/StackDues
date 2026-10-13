@@ -44,7 +44,9 @@ test('malformed hashes fail closed instead of weakening the password derivation'
 test('owner sessions expire after eight hours and return only the owner identity', async () => {
   const token = await createSession(config, now)
   assert.ok(token)
-  assert.deepEqual(await verifySession(token, config, now), { email: config.ownerEmail })
+  const sessionId = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString()).jti as string
+  assert.match(sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  assert.deepEqual(await verifySession(token, config, now), { email: config.ownerEmail, sessionId })
   assert.equal(await verifySession(token, config, new Date(now.getTime() + SESSION_MAX_AGE * 1000)), null)
 })
 
@@ -63,7 +65,9 @@ test('password rotation revokes earlier sessions even with the same signing secr
   const token = await createSession(config, now)
   const rotated = { ...config, passwordHash: await hashPassword('a replacement owner password') }
   assert.equal(await verifySession(token, rotated, now), null)
-  assert.deepEqual(await verifySession(await createSession(rotated, now), rotated, now), { email: config.ownerEmail })
+  const rotatedToken = await createSession(rotated, now)
+  assert.ok(rotatedToken)
+  assert.equal((await verifySession(rotatedToken, rotated, now))?.email, config.ownerEmail)
 })
 
 test('absent or malformed owner credentials prevent session creation and verification', async () => {
@@ -84,7 +88,7 @@ test('signed sessions still require the exact owner, issuer, audience, expiry an
   const original = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())
   const key = Uint8Array.from(config.sessionSecret.match(/../g)!, byte => parseInt(byte, 16))
   for (const overrides of [{ sub: 'attacker@example.com' }, { iss: 'https://attacker.example' },
-    { aud: 'other-app' }, { aud: ['stackdues', 'other-app'] }, { exp: undefined }, { version: undefined },
+    { aud: 'other-app' }, { aud: ['stackdues', 'other-app'] }, { exp: undefined }, { version: undefined }, { jti: undefined },
     { iat: undefined }, { iat: Math.floor(now.getTime() / 1000) + 60 }]) {
     const forged = await new SignJWT({ ...original, ...overrides }).setProtectedHeader({ alg: 'HS256' }).sign(key)
     assert.equal(await verifySession(forged, config, now), null)

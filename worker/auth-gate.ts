@@ -70,7 +70,19 @@ export async function authGate(request: Request, env: AuthBindings): Promise<Res
       if (request.method === 'GET' && isAppDocumentPath(path) && request.headers.get('Accept')?.includes('text/html')) return redirect('/login')
       return deny()
     }
-    if (request.method === 'POST' && path === '/auth/logout') return redirect('/login', cookie('', 0))
+    const revoked = await env.DB.prepare('SELECT session_id FROM revoked_sessions WHERE session_id = ? AND expires_at > ?')
+      .bind(identity.sessionId, new Date().toISOString()).first()
+    if (revoked) {
+      if (request.method === 'GET' && isAppDocumentPath(path) && request.headers.get('Accept')?.includes('text/html')) return redirect('/login')
+      return deny()
+    }
+    if (request.method === 'POST' && path === '/auth/logout') {
+      const now = new Date()
+      await env.DB.prepare('DELETE FROM revoked_sessions WHERE expires_at <= ?').bind(now.toISOString()).run()
+      await env.DB.prepare('INSERT INTO revoked_sessions(session_id, expires_at) VALUES (?, ?) ON CONFLICT(session_id) DO NOTHING')
+        .bind(identity.sessionId, new Date(now.getTime() + SESSION_MAX_AGE * 1000).toISOString()).run()
+      return redirect('/login', cookie('', 0))
+    }
     // Never let unsupported auth routes fall through to the private SPA renderer.
     if (path.startsWith('/auth/')) return new Response('Not found', { status: 404, headers: privateHeaders })
     return null

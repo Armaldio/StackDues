@@ -74,6 +74,7 @@ export async function createSession(config: AuthConfig | undefined, now = new Da
     const issuedAt = Math.floor(now.getTime() / 1000)
     return await new SignJWT({ version: await credentialVersion(config.passwordHash) })
       .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+      .setJti(crypto.randomUUID())
       .setIssuer(issuer).setAudience(audience).setSubject(config.ownerEmail)
       .setIssuedAt(issuedAt).setExpirationTime(issuedAt + SESSION_MAX_AGE)
       .sign(bytes(config.sessionSecret))
@@ -86,18 +87,19 @@ export async function verifySession(
   token: string | null | undefined,
   config: AuthConfig | undefined,
   now = new Date(),
-): Promise<{ email: string } | null> {
+): Promise<{ email: string; sessionId: string } | null> {
   if (!configured(config) || typeof token !== 'string' || !token || token.length > 4096
     || !Number.isFinite(now.getTime())) return null
   try {
     const { payload } = await jwtVerify(token, bytes(config.sessionSecret), {
       algorithms: ['HS256'], issuer, audience, subject: config.ownerEmail,
-      requiredClaims: ['exp', 'iat', 'sub', 'version'], currentDate: now,
+      requiredClaims: ['exp', 'iat', 'sub', 'version', 'jti'], currentDate: now,
     })
     if (payload.aud !== audience || typeof payload.iat !== 'number' || typeof payload.exp !== 'number'
       || payload.iat > Math.floor(now.getTime() / 1000) || payload.exp - payload.iat !== SESSION_MAX_AGE
+      || typeof payload.jti !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.jti)
       || payload.version !== await credentialVersion(config.passwordHash)) return null
-    return { email: config.ownerEmail }
+    return { email: config.ownerEmail, sessionId: payload.jti }
   } catch {
     return null
   }

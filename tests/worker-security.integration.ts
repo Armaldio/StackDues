@@ -48,6 +48,7 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.equal(registered.status, 303, await registered.clone().text())
     const setCookie = registered.headers.get('set-cookie')!
     assert.match(setCookie, /__Host-stackdues_session=/); assert.match(setCookie, /Secure; HttpOnly; SameSite=Strict/)
+    assert.match(setCookie, /Path=\//); assert.match(setCookie, /Max-Age=28800/)
     const cookie = setCookie.split(';')[0]!
     const dashboard = await request('/', { headers: { Cookie: cookie } })
     assert.equal(dashboard.status, 200)
@@ -133,6 +134,8 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.equal((await request('/auth/logout', { method: 'POST', headers: { Cookie: cookie, Origin: 'https://foreign.example' } })).status, 403)
     const logout = await request('/auth/logout', { method: 'POST', headers: { Cookie: cookie, Origin: base } })
     assert.match(logout.headers.get('set-cookie')!, /Max-Age=0/)
+    // A copied cookie remains in the caller's possession, but logout revokes it server-side.
+    assert.equal((await request('/api/costs', { headers: { Cookie: cookie } })).status, 401)
     // The same rate-limit key also bounds retries when credentials are invalid.
     let limited = false
     for (let count = 0; count < 12; count++) if ((await post('/auth/login', fields)).status === 429) { limited = true; break }
