@@ -79,6 +79,23 @@ test('Hostinger read failure keeps an independently saved Hostinger-labeled comm
   await expect(page.locator('#timeline')).not.toContainText('No active renewal is scheduled')
 })
 
+test('Hostinger sync failure keeps a known manual renewal and labels schedule coverage generically', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const manual = { id: 'manual-renewal', name: 'Manual annual plan', billingType: 'fixed', amount: 120, currency: 'USD', recurrenceInterval: 12, recurrenceUnit: 'month', nextRenewalAt: today, status: 'active', revision: 1 }
+  const cachedHostinger = { externalId: 'saved-hosting', name: 'Saved hosting service', status: 'active', recurrenceInterval: 12, recurrenceUnit: 'month', currency: 'USD', totalPrice: 60, renewalPrice: 120, isAutoRenewed: true, createdAt: '2025-01-01T00:00:00Z', expiresAt: null, nextBillingAt: `${today}T00:00:00Z`, linkedSubscriptionId: null, seenInLatestSync: false, automaticallyLinked: false, excluded: false, possibleMatches: [], providerNameCollision: false, renewalAvailable: true, upcomingCommitment: 120 }
+  await page.route('**/api/subscriptions**', route => route.fulfill({ json: [manual] }))
+  await page.route('**/api/costs', route => route.fulfill({ json: emptyFeed }))
+  await page.route('**/api/connections', route => route.fulfill({ json: { ...noConnections, hostinger: { configured: true, revision: 1 } } }))
+  await page.route('**/api/hostinger/subscriptions', route => route.fulfill({ json: { subscriptions: [cachedHostinger], sync: { status: 'error', lastAttemptAt: new Date().toISOString(), lastSyncedAt: '2026-10-01T00:00:00Z' } } }))
+  await page.goto('./history')
+
+  await expect(page.locator('#timeline')).toContainText('Manual annual plan')
+  await expect(page.locator('#timeline')).toContainText('The latest schedule coverage check failed. Showing known saved renewals; provider-discovered renewals may be incomplete.')
+  await expect(page.locator('#timeline')).not.toContainText('latest subscription check failed')
+  await expect(page.locator('#timeline')).not.toContainText('showing the schedule from the last successful read')
+  await expect(page.locator('#timeline')).toContainText('Hostinger sync failed')
+})
+
 test('connection status 401 remains distinct from a successful no-provider first run', async ({ page }) => {
   await readyResponses(page)
   await page.route('**/api/connections', route => route.fulfill({ status: 401, body: 'expired' }))
