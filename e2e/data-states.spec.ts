@@ -39,7 +39,7 @@ for (const route of routes) for (const width of [375, 1440]) test(`delayed initi
   release()
   if (route.path === '/history') await expect(page.getByRole('heading', { name: 'No cost history yet' })).toBeVisible()
   if (route.path === '/') await expect(page.locator('.overview-empty')).toContainText('No spending data has arrived yet')
-  if (route.path === '/services') await expect(page.locator('.subscriptions-empty')).toContainText('No manual subscriptions yet')
+  if (route.path === '/services') await expect(page.locator('.subscriptions-empty')).toContainText('No fixed subscriptions yet')
   if (route.path === '/connections') await expect(page.locator('.connection-card').first()).toContainText('Not connected')
 })
 
