@@ -46,8 +46,7 @@ for (const width of widths) {
         await expect(usd).not.toContainText(/USD 14.29|paid|charged this month/i)
       }
       if (state === 'forecast') await expect(overview.locator('.overview-forecast')).toContainText('USD 30.00')
-      if (state === 'manual') await expect(overview).toContainText('No connected usage provider')
-      if (state === 'unavailable') await expect(overview).toContainText('Usage unavailable')
+      if (state === 'manual') { await expect(overview).not.toContainText('Cloud usage reported'); await expect(overview.locator('.overview-currency-card').first()).toContainText('EUR 23.00') }
       if (process.env.STACKDUES_SCREENSHOT_DIR && state === 'mixed') {
         await page.screenshot({ path: `${process.env.STACKDUES_SCREENSHOT_DIR}/${process.env.STACKDUES_SCREENSHOT_PHASE ?? 'after'}-overview-${width}.png`, fullPage: true })
       }

@@ -14,7 +14,8 @@ import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTo
 import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, CostFeedReadError } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
-import { hostingerCoverage } from './domain/hostinger-coverage'
+import { hostingerCoverage, hostingerFreshness } from './domain/hostinger-coverage'
+import { currencyUsageNote, missingForecastLabel, providerStatusPresentation, type CurrencyProviderCoverage } from './domain/provider-presentation'
 import { ConnectionApiError, fetchConnections, type ConnectionStatuses } from './lib/connection-api'
 import { HostingerApiError, readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, SubscriptionRequestFailure, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
@@ -238,12 +239,7 @@ function providerIsConfigured(provider: 'aws' | 'cloudflare' | 'openai' | 'digit
   return connectionStatuses.value ? connectionStatuses.value[provider].configured : costFeed.value.providers[provider].status !== 'not-configured'
 }
 function providerConnectionNote(provider: 'aws' | 'cloudflare' | 'openai' | 'digitalocean') {
-  if (connectionReadState.value === 'pending') return 'Checking saved connection status…'
-  if (!connectionStatuses.value && connectionStatusesError.value) return 'Connection status unavailable; saved access has not been confirmed.'
-  if (!providerIsConfigured(provider)) return 'Not connected'
-  if (costFeedReadState.value === 'pending') return 'Checking saved billing observations…'
-  if (hasCostReadFailure.value) return 'Billing observations unavailable; retry the data check.'
-  return costFeed.value.providers[provider].status === 'synced' ? 'Checked successfully; no current billing data was returned.' : 'Credentials saved; waiting for the first successful billing sync.'
+  return providerStatusPresentation({ configured: connectionStatuses.value ? connectionStatuses.value[provider].configured : connectionStatusesError.value || connectionReadState.value === 'pending' ? undefined : providerIsConfigured(provider), syncStatus: costFeed.value.providers[provider].status, hasObservation: currentCostSnapshots(costFeed.value).some(row => row.provider === provider), stale: isProviderStale(costFeed.value.providers[provider]), readState: costFeedReadState.value === 'pending' ? costFeedReadState.value : connectionReadState.value === 'pending' ? connectionReadState.value : costFeedReadState.value }).detail
 }
 function hostingerIsConfigured() { return connectionStatuses.value ? connectionStatuses.value.hostinger.configured : !!hostingerState.value && hostingerState.value.sync.status !== 'not-configured' }
 const connectedMeteredProviders = computed(() => (['aws', 'cloudflare', 'openai'] as const).filter(providerIsConfigured))
@@ -260,11 +256,13 @@ const serviceProviders = computed(() => [
       .map(row => `Full-month forecast (includes actuals) · ${money(row.amount, row.currency)}`).join(' · ')
     const serviceNames = rows.flatMap(row => Array.isArray(row.metadata?.breakdown) ? row.metadata.breakdown.map(item => typeof item === 'object' && item && 'service' in item ? String(item.service) : '') : []).filter(Boolean)
     const summary = [reported, provider === 'digitalocean' ? '' : forecasts].filter(Boolean).join(' · ') || (state.status === 'error' ? 'Last sync failed; last known usage may be available in details.' : state.status === 'synced' ? provider === 'digitalocean' ? 'Checked successfully; no finalized invoice total is available.' : 'Checked successfully; no current usage report.' : hasCostReadFailure.value ? 'Usage data could not be loaded; current usage is unavailable.' : state.status === 'not-configured' ? 'Usage not connected; no reported amount.' : 'Usage data is pending.')
-    return { id: provider, name: providerName(provider), status: state.status, summary: `${summary}${serviceNames.length ? ` · ${serviceNames.join(' ')}` : ''}` }
+    const presentation = providerStatusPresentation({ configured: connectionStatuses.value?.[provider].configured ?? (connectionReadState.value === 'pending' || connectionStatusesError.value && !connectionStatuses.value ? undefined : state.status !== 'not-configured'), syncStatus: state.status, hasObservation: rows.length > 0, stale: isProviderStale(state), readState: connectionReadState.value === 'pending' ? 'pending' : costFeedReadState.value, readAt: costFeedReadAt.value })
+    return { id: provider, name: providerName(provider), status: state.status, presentation, summary: `${summary}${serviceNames.length ? ` · ${serviceNames.join(' ')}` : ''}` }
   }),
   {
     id: 'hostinger' as const, name: 'Hostinger',
     status: hostingerState.value?.sync.status ?? (hostingerIsConfigured() ? hostingerStateResolved.value ? 'error' : 'pending' : 'not-configured'),
+    presentation: providerStatusPresentation({ configured: connectionStatuses.value?.hostinger.configured ?? (connectionReadState.value === 'pending' || connectionStatusesError.value && !connectionStatuses.value ? undefined : hostingerIsConfigured()), syncStatus: hostingerState.value?.sync.status === 'synced' || hostingerState.value?.sync.status === 'error' || hostingerState.value?.sync.status === 'not-configured' ? hostingerState.value.sync.status : undefined, hasObservation: !!hostingerState.value?.subscriptions.length, stale: hostingerFreshness(hostingerState.value?.sync) === 'stale', readState: connectionReadState.value === 'pending' ? 'pending' : hostingerReadState.value, readAt: hostingerReadAt.value }),
     summary: hostingerState.value?.sync.status === 'error' ? 'Latest sync failed; saved subscriptions and previous discoveries are retained.' : hostingerState.value?.sync.status === 'synced' ? `${hostingerState.value.subscriptions.filter(row => row.linkedSubscriptionId).length} linked renewal(s); unlinked discoveries need review.` : hostingerIsConfigured() ? hostingerStateResolved.value ? 'Hostinger discovery could not be loaded; saved subscriptions remain in the inventory.' : 'Hostinger data is pending; saved linked renewals remain in fixed subscriptions.' : 'No Hostinger connection; saved manual renewals remain searchable.',
   },
 ])
@@ -280,15 +278,22 @@ const actualPeriodLabels = computed(() => Object.fromEntries(trackedTotals.value
   const usage = providerUsage.value[provider].find(item => item.currency === currency && item.hasActual)
   return usage ? `${providerName(provider)} · ${periodDescription(provider, currency)}` : null
 }).filter((value): value is string => value !== null).join(' · ')])))
+const currencyCoverage = computed<CurrencyProviderCoverage[]>(() => (['aws', 'cloudflare', 'openai'] as const).map(provider => ({
+  provider,
+  configured: providerIsConfigured(provider),
+  syncStatus: costFeed.value.providers[provider].status,
+  hasSuccessfulSync: !!costFeed.value.providers[provider].lastSyncedAt,
+  stale: isProviderStale(costFeed.value.providers[provider]),
+  observedCurrencies: costFeed.value.snapshots.filter(row => row.provider === provider).map(row => row.currency),
+})))
+function showMeteredCurrency(currency: string) {
+  if (connectionStatuses.value && !connectedMeteredProviders.value.length) return false
+  if (currencyCoverage.value.some(provider => provider.configured && provider.observedCurrencies.includes(currency))) return true
+  if (connectionReadState.value === 'pending' || costFeedReadState.value === 'pending' || ['unavailable', 'expired', 'retained', 'retained-expired'].includes(costFeedReadState.value)) return true
+  return currencyCoverage.value.some(provider => provider.configured && !provider.hasSuccessfulSync && provider.observedCurrencies.length === 0)
+}
 function meteredStatus(currency: string) {
-  if (costFeedReadState.value === 'pending') return 'Checking saved billing observations'
-  if (['unavailable', 'expired'].includes(costFeedReadState.value)) return 'Billing observations unavailable; retry the data check'
-  if (connectionReadState.value === 'pending') return 'Checking saved provider connections'
-  if (connectionStatusesError.value && !connectionStatuses.value) return 'Provider connection status unavailable'
-  if (!connectedMeteredProviders.value.length) return 'No connected usage provider'
-  if (connectedMeteredProviders.value.some(provider => costFeed.value.providers[provider].status === 'error')) return 'Usage unavailable; see provider status'
-  if (connectedMeteredProviders.value.some(provider => costFeed.value.providers[provider].status === 'synced')) return `No ${currency} usage report`
-  return 'Waiting for the first usage report'
+  return currencyUsageNote(currency, currencyCoverage.value, { feed: costFeedReadState.value, connections: connectionReadState.value })
 }
 const spendingInsights = computed(() => overviewInsights(costFeed.value.snapshots.filter(row => connectedBillingProviders.value.includes(row.provider))))
 const featuredInsight = computed(() => spendingInsights.value.find(item => item.drivers.length || item.changePercent !== null) ?? spendingInsights.value[0])
@@ -533,7 +538,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
         <div v-if="trackedTotals.length" class="tracked-spending-grid">
           <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card overview-currency-card">
             <p class="overview-currency">{{ total.currency }}</p>
-            <dl class="overview-spend-pair"><div><dt>Subscriptions · monthly average</dt><dd>{{ money(total.fixedMonthly, total.currency) }}</dd><small>Comparison rate; the actual charge follows each renewal schedule.</small></div><div><dt>Cloud usage reported</dt><dd>{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd><small v-if="actualPeriodLabels[total.currency]">Source and period · {{ actualPeriodLabels[total.currency] }}</small><small v-else>{{ meteredStatus(total.currency) }}</small></div></dl>
+            <dl class="overview-spend-pair"><div><dt>Subscriptions · monthly average</dt><dd>{{ money(total.fixedMonthly, total.currency) }}</dd><small>Comparison rate; the actual charge follows each renewal schedule.</small></div><div v-if="showMeteredCurrency(total.currency)"><dt>Cloud usage reported</dt><dd>{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd><small v-if="actualPeriodLabels[total.currency]">Source and period · {{ actualPeriodLabels[total.currency] }}</small><small v-else>{{ meteredStatus(total.currency) }}</small></div></dl>
             <dl v-if="total.meteredForecast !== null" class="overview-forecast"><div><dt>Full-month estimate</dt><dd>{{ money(total.meteredForecast, total.currency) }}</dd></div></dl>
           </article>
         </div>
@@ -563,7 +568,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
           <article v-for="provider in meteredProviders" :key="provider" class="provider-overview-card">
             <h3><button class="service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'provider', provider }, $event)">{{ providerName(provider) }} <span class="metric-note">{{ provider === 'openai' ? 'Organization API costs' : 'Metered usage' }}</span></button></h3>
             <template v-if="providerUsage[provider].length">
-              <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>{{ provider === 'openai' ? 'Organization API costs reported' : 'Provider-reported usage' }} · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month estimate</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : 'Unavailable' }}</dd></div><div><dt>Source period</dt><dd>{{ periodDescription(provider, usage.currency) }}</dd></div></dl>
+            <dl v-for="usage in providerUsage[provider]" :key="usage.currency"><div><dt>{{ provider === 'openai' ? 'Organization API costs reported' : 'Provider-reported usage' }} · {{ usage.currency }}</dt><dd>{{ money(usage.hasActual ? usage.actual : null, usage.currency) }}</dd></div><div><dt>Full-month estimate</dt><dd>{{ usage.hasForecast ? money(usage.estimatedMonthly, usage.currency) : missingForecastLabel(provider) }}</dd></div><div><dt>Source period</dt><dd>{{ periodDescription(provider, usage.currency) }}</dd></div></dl>
             </template>
             <p v-else class="metric-note">{{ providerConnectionNote(provider) }}</p>
             <p v-if="costFeed.providers[provider].status === 'error'" class="feed-warning" role="status">Sync failed; last known charges remain visible.</p>
@@ -597,7 +602,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
         <p v-if="subscriptionsReadState === 'pending'" role="status">Checking saved subscriptions…</p>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
         <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No fixed subscriptions yet</h3><p>Provider usage and unlinked Hostinger discoveries appear in the services inventory below; add a service to track fixed renewals.</p></div>
-        <ServiceInventory v-if="loaded" v-model:query="search" v-model:status="statusFilter" :subscriptions="subscriptions" :providers="serviceProviders" :discovered="hostingerInventoryRows" :blocked="blocked" :loading="loading || costFeedReadState === 'pending' || !hostingerStateResolved" :format-money="(amount, currency) => amount === null ? 'Price unavailable' : money(amount, currency)" :recurrence="recurrence" :monthly="item => normalizeCost(item).monthly" :renewal="item => nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—'" @details="openServiceDetails($event)" @edit="openForm" @toggle="setStatus" @remove="remove" @review="openHostingerManagement" />
+        <ServiceInventory v-if="loaded" v-model:query="search" v-model:status="statusFilter" :subscriptions="subscriptions" :providers="serviceProviders" :discovered="hostingerInventoryRows" :blocked="blocked" :loading="loading || connectionReadState === 'pending' || costFeedReadState === 'pending' || !hostingerStateResolved" :format-money="(amount, currency) => amount === null ? 'Price unavailable' : money(amount, currency)" :recurrence="recurrence" :monthly="item => normalizeCost(item).monthly" :renewal="item => nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—'" @details="openServiceDetails($event)" @edit="openForm" @toggle="setStatus" @remove="remove" @review="openHostingerManagement" />
       </section>
       <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
       <p v-if="!hostingerStateResolved" role="status">Checking saved Hostinger services…</p>
@@ -614,5 +619,5 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
     </main>
   </div>
   <SubscriptionForm v-if="showForm" :subscription="editing" :today="today" :save-failure="formSaveFailure" :recovery-notice="formRecoveryNotice" :review-required="formReviewRequired" :can-retry="formCanRetry" :checking-save="formCheckingSave" :saving="busy" :aria-busy="busy" @save="save" @check-save="checkFormSave" @confirm-latest="confirmLatestForDraft" @close="closeForm" />
-  <ServiceDetail v-if="serviceSelection" :selection="serviceSelection" :feed="costFeed" :subscriptions="subscriptions" :subscriptions-loaded="loaded" :today="today" :hostinger-sync="hostingerState?.sync" :hostinger-rows="hostingerState?.subscriptions" @close="closeServiceDetails" @edit="editDetailedSubscription" />
+  <ServiceDetail v-if="serviceSelection" :selection="serviceSelection" :feed="costFeed" :subscriptions="subscriptions" :subscriptions-loaded="loaded" :today="today" :hostinger-sync="hostingerState?.sync" :hostinger-rows="hostingerState?.subscriptions" :connection-statuses="connectionStatuses" :connection-read-state="connectionReadState" :cost-feed-read-state="costFeedReadState" :cost-feed-read-at="costFeedReadAt" :hostinger-read-state="hostingerReadState" :hostinger-read-at="hostingerReadAt" @close="closeServiceDetails" @edit="editDetailedSubscription" />
 </template>

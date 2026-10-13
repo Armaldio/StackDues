@@ -3,8 +3,9 @@ import { computed, ref } from 'vue'
 import type { StoredSubscription } from '../lib/subscription-api'
 import type { HostingerDiscoveryRow } from '../lib/hostinger-api'
 import type { CostProvider } from '../domain/usage-costs'
+import type { ProviderPresentation } from '../domain/provider-presentation'
 
-export type InventoryProvider = { id: CostProvider | 'hostinger'; name: string; status: string; summary: string }
+export type InventoryProvider = { id: CostProvider | 'hostinger'; name: string; status: string; summary: string; presentation: ProviderPresentation }
 const props = defineProps<{
   subscriptions: StoredSubscription[]
   providers: InventoryProvider[]
@@ -52,8 +53,8 @@ const visibleCount = computed(() => visibleSubscriptions.value.length + visibleP
         <div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="emit('edit', item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="emit('toggle', item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="emit('remove', item)">Delete</button></div>
       </article>
       <article v-for="item in visibleProviders" :key="`provider-${item.id}`" class="inventory-card provider-inventory-card" role="listitem">
-        <header><div><p class="eyebrow">{{ item.id === 'hostinger' ? 'Fixed provider renewals' : item.id === 'digitalocean' ? 'Finalized invoices' : 'Metered provider' }}</p><h3><button class="service-detail-trigger" type="button" @click="emit('details', { kind: 'provider', provider: item.id })">{{ item.name }}</button></h3></div><span class="status-label" :class="item.status === 'not-configured' ? 'not-configured' : item.status">{{ item.status === 'not-configured' ? 'Not connected' : item.status === 'error' ? 'Sync failed' : item.status === 'synced' ? 'Connected' : 'Pending' }}</span></header>
-        <p>{{ item.summary }}</p><p class="metric-note">{{ item.id === 'hostinger' ? 'Linked renewals are represented once by the saved fixed subscription; discoveries remain uncounted until reviewed.' : item.id === 'digitalocean' ? 'Finalized invoice totals are shown for their billing periods, not as current-month accrual.' : 'Reported usage and forecasts stay separate from fixed commitments.' }}</p><button class="text-button" type="button" @click="emit('details', { kind: 'provider', provider: item.id })">View provider details</button>
+        <header><div><p class="eyebrow">{{ item.id === 'hostinger' ? 'Fixed provider renewals' : item.id === 'digitalocean' ? 'Finalized invoices' : 'Metered provider' }}</p><h3><button class="service-detail-trigger" type="button" @click="emit('details', { kind: 'provider', provider: item.id })">{{ item.name }}</button></h3></div><span class="status-label" :class="`status-${item.presentation.state}`">{{ item.presentation.label }}</span></header>
+        <p>{{ item.summary }}</p><p v-if="!['updated', 'checked-empty', 'not-connected'].includes(item.presentation.state)" class="metric-note" role="status">{{ item.presentation.detail }}</p><p class="metric-note">{{ item.id === 'hostinger' ? 'Linked renewals are represented once by the saved fixed subscription; discoveries remain uncounted until reviewed.' : item.id === 'digitalocean' ? 'Finalized invoice totals are shown for their billing periods, not as current-month accrual.' : 'Reported usage and forecasts stay separate from fixed commitments.' }}</p><button class="text-button" type="button" @click="emit('details', { kind: 'provider', provider: item.id })">View provider details</button>
       </article>
       <article v-for="item in visibleDiscovered" :key="`hostinger-${item.externalId}`" class="inventory-card discovered-inventory-card" role="listitem">
         <header><div><p class="eyebrow">Hostinger · {{ item.externalId }}</p><h3>{{ item.name }}</h3></div><span class="status-pill">{{ item.excluded ? 'Excluded' : item.renewalAvailable ? 'Needs review' : 'Unavailable' }}</span></header>

@@ -5,6 +5,8 @@ import { syncHostinger } from '../lib/hostinger-api'
 import type { CostFeed } from '../lib/cost-feed'
 import type { HostingerDiscovery } from '../lib/hostinger-api'
 import { currentCostSnapshots, isProviderStale } from '../lib/cost-feed'
+import { hostingerFreshness } from '../domain/hostinger-coverage'
+import { providerStatusPresentation } from '../domain/provider-presentation'
 const props = defineProps<{ costFeed: CostFeed; hostinger?: HostingerDiscovery; initialStatuses?: ConnectionStatuses }>()
 const emit = defineEmits<{ changed: []; loaded: [statuses: ConnectionStatuses]; details: [provider: ConnectionProvider | 'github'] }>()
 const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger']
@@ -71,14 +73,18 @@ function hasSyncFailure(provider: ConnectionProvider) {
 function connectionLabel(provider: ConnectionProvider) {
   if (busy.value === provider && syncState[provider] === 'idle') return 'Connecting…'
   if (syncState[provider] === 'syncing') return 'Syncing…'
-  if (statuses.value && !statuses.value[provider].configured) return 'Not connected'
-  if (hasSyncFailure(provider)) return 'Sync failed'
-  if (provider !== 'hostinger' && isProviderStale(props.costFeed.providers[provider])) return 'Needs attention'
-  if (syncState[provider] === 'synced' || refreshStatus(provider) === 'synced') {
-    const hasData = provider === 'hostinger' ? !!props.hostinger?.subscriptions.length : currentCostSnapshots(props.costFeed).some(row => row.provider === provider)
-    return hasData ? 'Updated' : provider === 'hostinger' ? 'Checked · no renewals returned' : 'Checked · no data returned'
-  }
-  return statuses.value ? statuses.value[provider].configured ? 'Credentials saved' : 'Not connected' : loading.value ? 'Loading…' : 'Unavailable'
+  const configured = statuses.value ? statuses.value[provider].configured : error.value ? undefined : undefined
+  const synced = syncState[provider] === 'synced' || refreshStatus(provider) === 'synced'
+  const hasData = provider === 'hostinger' ? !!props.hostinger?.subscriptions.length : currentCostSnapshots(props.costFeed).some(row => row.provider === provider)
+  const freshness = provider === 'hostinger' ? hostingerFreshness(props.hostinger?.sync) : undefined
+  const failed = hasSyncFailure(provider) || freshness === 'failed'
+  return providerStatusPresentation({
+    configured,
+    syncStatus: failed ? 'error' : synced ? 'synced' : provider === 'hostinger' ? undefined : props.costFeed.providers[provider].status,
+    hasObservation: hasData,
+    stale: provider === 'hostinger' ? freshness === 'stale' : isProviderStale(props.costFeed.providers[provider]),
+    readState: loading.value ? 'pending' : error.value && !statuses.value ? 'unavailable' : undefined,
+  }).label
 }
 async function reload() {
   if (loading.value || busy.value) return
