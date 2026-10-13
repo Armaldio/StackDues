@@ -170,7 +170,7 @@ onUnmounted(() => { if (dialog.value?.open) dialog.value.close() })
 .detail-block h3{font-size:1rem;margin:0 0 .75rem}
 .detail-metrics{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem 1rem}
 .detail-metrics>div{padding:.6rem 0;border-bottom:1px solid var(--line);min-width:0}
-.detail-metrics dt,.detail-observations small{font-size:.72rem;color:var(--muted)}
+.detail-metrics dt,.detail-observations small{font-size: .75rem;color:var(--muted)}
 .detail-metrics dd{margin:.25rem 0 0;overflow-wrap:anywhere;font-size:.85rem}
 .detail-observations{list-style:none;padding:0;margin:0}
 .detail-observations li{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem;padding:.75rem 0;border-bottom:1px solid var(--line)}

@@ -538,7 +538,9 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
         <div v-if="trackedTotals.length" class="tracked-spending-grid">
           <article v-for="total in trackedTotals" :key="total.currency" class="tracked-spending-card overview-currency-card">
             <p class="overview-currency">{{ total.currency }}</p>
-            <dl class="overview-spend-pair"><div><dt>Subscriptions · monthly average</dt><dd>{{ money(total.fixedMonthly, total.currency) }}</dd><small>Comparison rate; the actual charge follows each renewal schedule.</small></div><div v-if="showMeteredCurrency(total.currency)"><dt>Cloud usage reported</dt><dd>{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd><small v-if="actualPeriodLabels[total.currency]">Source and period · {{ actualPeriodLabels[total.currency] }}</small><small v-else>{{ meteredStatus(total.currency) }}</small></div></dl>
+            <dl class="overview-spend-pair"><div><dt>Subscriptions · monthly average</dt><dd :aria-describedby="`fixed-spend-note-${total.currency}`">{{ money(total.fixedMonthly, total.currency) }}</dd></div><div v-if="showMeteredCurrency(total.currency)"><dt>Cloud usage reported</dt><dd :aria-describedby="`metered-spend-note-${total.currency}`">{{ total.meteredActual === null ? 'Not reported' : money(total.meteredActual, total.currency) }}</dd></div></dl>
+            <p class="overview-spend-note" :id="`fixed-spend-note-${total.currency}`">Comparison rate; the actual charge follows each renewal schedule.</p>
+            <p v-if="showMeteredCurrency(total.currency)" class="overview-spend-note" :id="`metered-spend-note-${total.currency}`">{{ actualPeriodLabels[total.currency] ? `Source and period · ${actualPeriodLabels[total.currency]}` : meteredStatus(total.currency) }}</p>
             <dl v-if="total.meteredForecast !== null" class="overview-forecast"><div><dt>Full-month estimate</dt><dd>{{ money(total.meteredForecast, total.currency) }}</dd></div></dl>
           </article>
         </div>

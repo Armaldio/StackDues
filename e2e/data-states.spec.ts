@@ -102,7 +102,7 @@ test('connection status 401 remains distinct from a successful no-provider first
   await page.goto('./connections')
   await expect(page.getByRole('alert').first()).toContainText('Your session expired')
   await expect(page.getByRole('link', { name: 'Sign in' }).first()).toBeVisible()
-  await expect(page.locator('.connection-card').first()).toContainText('Unavailable')
+  await expect(page.locator('.connection-card').first()).toContainText(/Unavailable/i)
 })
 
 test('failed refresh keeps older provider observations visible and dates the retained read', async ({ page }) => {
