@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
 import { AxeBuilder } from '@axe-core/playwright'
-import { mkdir, writeFile } from 'node:fs/promises'
 
 const routes = [
   { path: '/', name: 'overview' },
@@ -14,7 +13,6 @@ const capturedAt = new Date().toISOString()
 const periodStart = `${today.slice(0, 7)}-01`
 const nextRenewalAt = `${Number(today.slice(0, 4)) + 1}-10-01`
 const phase = process.env.DUES31_EVIDENCE_PHASE ?? 'after'
-const evidenceDir = `artifacts/dues-31/${phase}`
 
 const subscriptions = [
   { id: 'svc-long', name: 'A Very Long Provider Name for Responsive Layout and Assistive Technology Review', provider: 'Billing account ending in 98765432109876543210', billingType: 'fixed', amount: 9876543.21, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt, status: 'active', revision: 1 },
@@ -93,10 +91,10 @@ for (const route of routes) for (const width of widths) {
     await page.goto(route.path)
     await expect(page.locator('main')).toBeVisible()
     await expect(page.locator('main h1')).toBeVisible()
-    await mkdir(evidenceDir, { recursive: true })
     const measurement = await measure(page)
-    await page.screenshot({ path: `${evidenceDir}/${route.name}-${width}.png`, fullPage: true })
-    await writeFile(`${evidenceDir}/${route.name}-${width}.json`, JSON.stringify(measurement, null, 2))
+    const screenshot = test.info().outputPath(`${phase}-${route.name}-${width}.png`)
+    await page.screenshot({ path: screenshot, fullPage: true })
+    await test.info().attach('rendered-screenshot', { path: screenshot, contentType: 'image/png' })
     await test.info().attach('rendered-text-diagnostics', { body: JSON.stringify(measurement, null, 2), contentType: 'application/json' })
     if (phase === 'after') {
       expect(measurement.horizontalOverflow, `${route.name} should reflow at ${width}px`).toBeLessThanOrEqual(0)
@@ -115,9 +113,9 @@ for (const route of routes) {
     await page.goto(route.path)
     await expect(page.locator('main h1')).toBeVisible()
     const measurement = await measure(page)
-    await mkdir(evidenceDir, { recursive: true })
-    await page.screenshot({ path: `${evidenceDir}/${route.name}-zoom-200-equivalent-640.png`, fullPage: true })
-    await writeFile(`${evidenceDir}/${route.name}-zoom-200-equivalent-640.json`, JSON.stringify(measurement, null, 2))
+    const screenshot = test.info().outputPath(`${phase}-${route.name}-zoom-200-equivalent-640.png`)
+    await page.screenshot({ path: screenshot, fullPage: true })
+    await test.info().attach('rendered-screenshot', { path: screenshot, contentType: 'image/png' })
     if (phase === 'after') {
       expect(measurement.horizontalOverflow, `${route.name} should reflow at 200%-equivalent width`).toBeLessThanOrEqual(0)
       expect(measurement.tinyText).toEqual([])
