@@ -42,18 +42,19 @@ export async function collectCloudflareCosts(options: CloudflareOptions): Promis
       { headers: { Authorization: `Bearer ${options.apiToken}`, Accept: 'application/json' }, signal: controller.signal },
     )
     if (response.status === 401 || response.status === 403) throw new Error('Cloudflare authorization failed. Check the server token and Billing Read permission.')
-    if (!response.ok) throw new Error('Cloudflare request failed.')
+    if (!response.ok) throw new Error(`Cloudflare HTTP status ${response.status}.`)
     payload = await response.json()
   } catch (error) {
     if (controller.signal.aborted) throw new Error('Cloudflare request timed out.')
-    if (error instanceof Error && ['Cloudflare authorization failed. Check the server token and Billing Read permission.', 'Cloudflare request failed.'].includes(error.message)) throw error
+    if (error instanceof Error && (error.message === 'Cloudflare authorization failed. Check the server token and Billing Read permission.'
+      || /^Cloudflare HTTP status [1-5]\d{2}\.$/.test(error.message))) throw error
     throw new Error('Cloudflare request failed.')
   } finally {
     clearTimeout(timer)
   }
 
   const envelope = object(payload)
-  if (envelope.success !== true) throw new Error('Cloudflare request failed.')
+  if (envelope.success !== true) throw new Error('Cloudflare provider rejected the request.')
   if (!Array.isArray(envelope.result)) invalidData()
   // This endpoint has no documented pagination. Do not publish partial money totals
   // if Cloudflare starts sending pagination metadata in a future response.

@@ -152,6 +152,13 @@ test('Worker sync isolates providers and commits honest observations in real D1'
         { event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'billable_usage', kind: 'authorization', attemptedAt: '2026-10-08T22:30:00.000Z' },
         { event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'subscriptions', kind: 'authorization', attemptedAt: '2026-10-08T22:30:00.000Z' },
       ])
+      const notFound = await call({ action: 'manual', mode: 'cloudflare-subscription-not-found', providers: ['cloudflare'], now: '2026-10-08T22:45:00Z' })
+      assert.equal(notFound.feed.providers.cloudflare.lastSyncedAt, '2026-10-08T21:00:00.000Z')
+      assert.equal(notFound.feed.snapshots.filter(item => item.provider === 'cloudflare').length, 6)
+      assert.deepEqual(notFound.diagnostics, [{ event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'subscriptions', kind: 'http_404', attemptedAt: '2026-10-08T22:45:00.000Z' }])
+      const notFoundCommitments = (await call<StoredSubscription[]>({ action: 'subscriptions' })).filter(row => row.provider === 'Cloudflare')
+      assert.equal(notFoundCommitments.length, 1)
+      assert.equal(notFoundCommitments[0]?.amount, 12.34)
     })
     await t.test('Cloudflare plan updates apply until a user overrides fields, and deletion survives future syncs', async () => {
       await call({ action: 'manual', mode: 'cloudflare-updated', providers: ['cloudflare'], now: '2026-10-08T23:00:00Z' })

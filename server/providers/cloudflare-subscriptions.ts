@@ -134,15 +134,17 @@ export async function fetchCloudflareSubscriptions(options: CloudflareSubscripti
           signal: controller.signal,
         })
         if (response.status === 401 || response.status === 403) throw new Error('Cloudflare authorization failed. Check the server token and Billing Read permission.')
-        if (!response.ok) throw new Error('Cloudflare request failed.')
+        if (!response.ok) throw new Error(`Cloudflare HTTP status ${response.status}.`)
         payload = await response.json()
       } catch (error) {
-        if (error instanceof Error && ['Cloudflare authorization failed. Check the server token and Billing Read permission.', 'Cloudflare request failed.'].includes(error.message)) throw error
+        if (error instanceof Error && (error.message === 'Cloudflare authorization failed. Check the server token and Billing Read permission.'
+          || /^Cloudflare HTTP status [1-5]\d{2}\.$/.test(error.message))) throw error
         throw new Error('Cloudflare request failed.')
       }
 
       const envelope = object(payload)
-      if (envelope.success !== true || !Array.isArray(envelope.result)) throw new Error('Cloudflare request failed.')
+      if (envelope.success !== true) throw new Error('Cloudflare provider rejected the request.')
+      if (!Array.isArray(envelope.result)) invalidData()
       const pageRows = envelope.result
       const info = envelope.result_info === undefined ? null : object(envelope.result_info)
       if (info) {
@@ -164,6 +166,7 @@ export async function fetchCloudflareSubscriptions(options: CloudflareSubscripti
   } catch (error) {
     if (controller.signal.aborted) throw new Error('Cloudflare request timed out.')
     if (error instanceof Error && (error.message.startsWith('Cloudflare authorization failed.') || error.message.startsWith('Cloudflare request failed.')
+      || error.message.startsWith('Cloudflare HTTP status ') || error.message.startsWith('Cloudflare provider rejected.')
       || error.message.startsWith('Cloudflare returned invalid subscription data.') || error.message.startsWith('Cloudflare returned incomplete subscription data.'))) throw error
     throw new Error('Cloudflare request failed.')
   } finally {

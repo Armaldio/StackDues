@@ -14,7 +14,7 @@ import type { loadProviderCredentials } from '../../server/security/provider-cre
 const awsCredentials = { accessKeyId: 'TESTACCESSKEY', secretAccessKey: 'TEST_FAKE_AWS_SECRET' }
 const cloudflareCredentials = { accountId: '023e105f4ecef8ad9ca31a8372d0c353', apiToken: 'TEST_FAKE_CLOUDFLARE_TOKEN' }
 const openAiCredentials = { adminApiKey: 'TEST_OPENAI_ADMIN_KEY' }
-type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-both-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'cloudflare-credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
+type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-subscription-not-found' | 'cloudflare-both-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'cloudflare-credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
 
 // Local-only fixture. Neither the SDK client nor fetch can contact real providers.
 export default {
@@ -69,6 +69,7 @@ export default {
           calls.cloudflare++
           if ((init?.headers as Record<string, string>).Authorization !== `Bearer ${cloudflareCredentials.apiToken}`) throw new Error('Unexpected fake credentials')
           if (String(_url).includes('/subscriptions?')) {
+            if (mode === 'cloudflare-subscription-not-found') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN endpoint detail', { status: 404 })
             if (mode === 'cloudflare-subscription-error' || mode === 'cloudflare-both-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
             const plan = {
               id: '506e3185e9c882d175a2d0cb0093d9f2', currency: 'USD',

@@ -1,5 +1,5 @@
 export type CloudflareCollectionStage = 'credentials' | 'billable_usage' | 'subscriptions'
-export type CloudflareFailureKind = 'authorization' | 'timeout' | 'incomplete_response' | 'invalid_response' | 'request_failed' | 'configuration' | 'unknown'
+export type CloudflareFailureKind = 'authorization' | 'timeout' | 'incomplete_response' | 'invalid_response' | 'request_failed' | 'provider_rejected' | 'configuration' | 'unknown' | `http_${number}`
 
 export type CloudflareCollectionFailureEvent = Readonly<{
   event: 'cloudflare_collection_failed'
@@ -11,7 +11,10 @@ export type CloudflareCollectionFailureEvent = Readonly<{
 
 function failureKind(error: unknown): CloudflareFailureKind {
   const message = error instanceof Error ? error.message : ''
+  const status = /^Cloudflare HTTP status ([1-5]\d{2})\.$/.exec(message)
+  if (status) return `http_${Number(status[1])}`
   if (message.includes('authorization failed')) return 'authorization'
+  if (message.includes('provider rejected')) return 'provider_rejected'
   if (message.includes('timed out')) return 'timeout'
   if (message.includes('configuration') || message.includes('credentials are unavailable')) return 'configuration'
   if (message.includes('incomplete')) return 'incomplete_response'

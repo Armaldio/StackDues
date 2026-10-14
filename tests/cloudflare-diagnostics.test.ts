@@ -9,6 +9,8 @@ test('Cloudflare collection diagnostics use bounded stages and sanitized failure
     ['credentials', new Error('Provider credentials are unavailable.'), 'configuration'],
     ['billable_usage', new Error('Cloudflare authorization failed. Check the server token and Billing Read permission.'), 'authorization'],
     ['subscriptions', new Error('Cloudflare request timed out.'), 'timeout'],
+    ['subscriptions', new Error('Cloudflare HTTP status 404.'), 'http_404'],
+    ['subscriptions', new Error('Cloudflare provider rejected the request.'), 'provider_rejected'],
     ['subscriptions', new Error('Cloudflare returned invalid subscription data.'), 'invalid_response'],
     ['billable_usage', new Error('Cloudflare returned incomplete billing data.'), 'incomplete_response'],
     ['billable_usage', new Error('Cloudflare request failed.'), 'request_failed'],
