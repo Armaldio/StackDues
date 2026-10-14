@@ -1,28 +1,36 @@
 import { GetCostForecastCommand } from '@aws-sdk/client-cost-explorer'
 import migration from '../../migrations/0002_ledger.sql'
 import credentialMigration from '../../migrations/0003_provider_credentials.sql'
+import hostingerMigration from '../../migrations/0004_hostinger_discovery.sql'
+import hostingerCommitmentMigration from '../../migrations/0005_hostinger_auto_commitments.sql'
 import openAiMigration from '../../migrations/0006_openai_costs.sql'
 import digitalOceanMigration from '../../migrations/0007_digitalocean_billing.sql'
-import { LedgerError, readCostFeed } from '../../server/data/ledger.ts'
+import cloudflareFixedMigration from '../../migrations/0010_cloudflare_fixed_commitments.sql'
+import { LedgerError, createStoredSubscription, deleteStoredSubscription, listSubscriptions, patchStoredSubscription, readCostFeed } from '../../server/data/ledger.ts'
+import { cloudflareDeleteExclusionStatement, cloudflareEditStatement } from '../../server/data/cloudflare-commitments.ts'
 import { syncCosts, type CostSyncDependencies } from '../../server/worker-sync.ts'
 import type { loadProviderCredentials } from '../../server/security/provider-credentials.ts'
 
 const awsCredentials = { accessKeyId: 'TESTACCESSKEY', secretAccessKey: 'TEST_FAKE_AWS_SECRET' }
 const cloudflareCredentials = { accountId: '023e105f4ecef8ad9ca31a8372d0c353', apiToken: 'TEST_FAKE_CLOUDFLARE_TOKEN' }
 const openAiCredentials = { adminApiKey: 'TEST_OPENAI_ADMIN_KEY' }
-type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
+type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
 
 // Local-only fixture. Neither the SDK client nor fetch can contact real providers.
 export default {
   async fetch(request: Request, env: { DB: D1Database }): Promise<Response> {
-    const input = await request.json() as { action: string; mode?: Mode; now?: string; sql?: string; providers?: ('aws' | 'cloudflare' | 'openai' | 'digitalocean')[] }
+    const input = await request.json() as { action: string; mode?: Mode; now?: string; sql?: string; providers?: ('aws' | 'cloudflare' | 'openai' | 'digitalocean')[]; id?: string; revision?: number; subscription?: any }
     try {
       if (input.action === 'initialize') {
-        for (const sql of [migration, credentialMigration, openAiMigration, digitalOceanMigration]) await env.DB.exec(sql.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
+        for (const sql of [migration, credentialMigration, hostingerMigration, hostingerCommitmentMigration, openAiMigration, digitalOceanMigration, cloudflareFixedMigration]) await env.DB.exec(sql.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
         return Response.json({ ready: true })
       }
       if (input.action === 'sql') { await env.DB.exec(input.sql!); return Response.json({ ready: true }) }
       if (input.action === 'costs') return Response.json(await readCostFeed(env.DB))
+      if (input.action === 'subscriptions') return Response.json(await listSubscriptions(env.DB))
+      if (input.action === 'create-subscription') return Response.json(await createStoredSubscription(env.DB, input.subscription))
+      if (input.action === 'edit-subscription') return Response.json(await patchStoredSubscription(env.DB, input.id!, input.subscription, input.revision, (item, revision) => cloudflareEditStatement(env.DB, item, revision)))
+      if (input.action === 'delete-subscription') return Response.json(await deleteStoredSubscription(env.DB, input.id!, input.revision, (id, revision) => cloudflareDeleteExclusionStatement(env.DB, id, revision)))
       const mode = input.mode ?? 'success'
       const calls = { aws: 0, cloudflare: 0, openai: 0, digitalocean: 0 }
       const dependencies: CostSyncDependencies = {
@@ -57,6 +65,16 @@ export default {
           }
           calls.cloudflare++
           if ((init?.headers as Record<string, string>).Authorization !== `Bearer ${cloudflareCredentials.apiToken}`) throw new Error('Unexpected fake credentials')
+          if (String(_url).includes('/subscriptions?')) {
+            if (mode === 'cloudflare-subscription-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
+            const plan = {
+              id: '506e3185e9c882d175a2d0cb0093d9f2', currency: 'USD',
+              current_period_start: '2026-10-15T00:00:00Z', current_period_end: mode === 'cloudflare-updated' ? '2026-12-15T00:00:00Z' : '2026-11-15T00:00:00Z',
+              frequency: 'monthly', price: mode === 'cloudflare-updated' ? 14.56 : 12.34,
+              rate_plan: { id: 'workers_paid', public_name: 'Workers Paid Plan', scope: 'account', sets: ['workers'] }, state: mode === 'cloudflare-trial' ? 'Trial' : 'Paid',
+            }
+            return Response.json({ success: true, result: mode === 'empty-cloudflare' ? [] : [plan], result_info: { count: mode === 'empty-cloudflare' ? 0 : 1, page: 1, per_page: 100, total_count: mode === 'empty-cloudflare' ? 0 : 1 } })
+          }
           if (mode === 'cloudflare-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
           return Response.json({ success: true, result: mode === 'empty-cloudflare' ? [] : [{
             BillingCurrency: 'USD', BillingPeriodStart: '2026-09-15T00:00:00Z',

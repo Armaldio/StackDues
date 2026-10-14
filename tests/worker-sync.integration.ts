@@ -8,6 +8,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CostFeed } from '../src/lib/cost-feed.ts'
 import { latestCostSnapshots } from '../src/domain/usage-costs.ts'
+import type { StoredSubscription } from '../server/data/ledger.ts'
+
+type WorkerSyncResponse = { feed: CostFeed; calls: { aws: number; cloudflare: number; openai: number; digitalocean: number }; message?: string }
 
 test('Worker sync isolates providers and commits honest observations in real D1', { timeout: 90_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'stackdues-sync-'))
@@ -20,9 +23,9 @@ test('Worker sync isolates providers and commits honest observations in real D1'
   let output = ''
   workerProcess.stdout.on('data', chunk => { output += chunk })
   workerProcess.stderr.on('data', chunk => { output += chunk })
-  async function call(input: Record<string, unknown>, status = 200) {
+  async function call<T = WorkerSyncResponse>(input: Record<string, unknown>, status = 200): Promise<T> {
     const response = await fetch('http://127.0.0.1:8795/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
-    const body = await response.json() as { feed: CostFeed; calls: { aws: number; cloudflare: number }; message?: string }
+    const body = await response.json() as T
     assert.equal(response.status, status, JSON.stringify(body))
     assert.ok(!JSON.stringify(body).includes('TEST_FAKE_'))
     return body
@@ -42,7 +45,7 @@ test('Worker sync isolates providers and commits honest observations in real D1'
     })
     await t.test('manual and scheduled attempts share normalization and stable retry IDs', async () => {
       const manual = await call({ action: 'manual', mode: 'success', now: '2026-10-08T13:00:00Z' })
-      assert.deepEqual(manual.calls, { aws: 4, cloudflare: 1, openai: 1, digitalocean: 1 })
+      assert.deepEqual(manual.calls, { aws: 4, cloudflare: 2, openai: 1, digitalocean: 1 })
       assert.equal(manual.feed.snapshots.length, 7)
       assert.equal(manual.feed.snapshots.find(item => item.kind === 'forecast')?.amount, 19)
       assert.equal(manual.feed.snapshots.find(item => item.provider === 'cloudflare')?.amount, 2)
@@ -51,8 +54,16 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       assert.equal(manual.feed.snapshots.find(item => item.provider === 'digitalocean')?.amount, 18.4)
       assert.equal(manual.feed.snapshots.find(item => item.provider === 'digitalocean')?.metadata?.scope, 'finalized-invoice-total')
       assert.ok(!JSON.stringify(manual).includes('TEST_DIGITALOCEAN_TOKEN'))
+      const commitments = await call<StoredSubscription[]>({ action: 'subscriptions' })
+      const workers = commitments.filter(row => row.provider === 'Cloudflare')
+      assert.equal(workers.length, 1)
+      assert.deepEqual({ name: workers[0]?.name, amount: workers[0]?.amount, currency: workers[0]?.currency, interval: workers[0]?.recurrenceInterval, unit: workers[0]?.recurrenceUnit, next: workers[0]?.nextRenewalAt, status: workers[0]?.status }, {
+        name: 'Workers Paid Plan', amount: 12.34, currency: 'USD', interval: 1, unit: 'month', next: '2026-11-15', status: 'active',
+      })
       const scheduled = await call({ action: 'scheduled', mode: 'success', now: '2026-10-08T13:00:00Z' })
       assert.deepEqual(scheduled.feed, manual.feed)
+      const repeated = await call<StoredSubscription[]>({ action: 'subscriptions' })
+      assert.equal(repeated.filter(row => row.provider === 'Cloudflare').length, 1, 'a repeated automatic sync must not duplicate the fixed plan')
     })
     await t.test('authorization and decryption failures preserve AWS history while Cloudflare succeeds', async () => {
       for (const [mode, hour] of [['aws-error', '14'], ['credential-error', '15']] as const) {
@@ -106,12 +117,41 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       assert.equal(feed.providers.cloudflare.lastSyncedAt, '2026-10-08T19:00:00.000Z')
       assert.equal(feed.snapshots.filter(item => item.provider === 'cloudflare').length, 4)
       assert.ok(!feed.snapshots.some(item => item.provider === 'cloudflare' && item.capturedAt === '2026-10-08T19:00:00.000Z'))
+      const commitments = await call<StoredSubscription[]>({ action: 'subscriptions' })
+      assert.equal(commitments.filter(row => row.provider === 'Cloudflare' && row.status === 'active').length, 1, 'an empty report must retain the last known commitment')
     })
     await t.test('a provider-specific refresh contacts only the newly connected provider', async () => {
       const { feed, calls } = await call({ action: 'manual', mode: 'success', providers: ['cloudflare'], now: '2026-10-08T20:00:00Z' })
-      assert.deepEqual(calls, { aws: 0, cloudflare: 1, openai: 0, digitalocean: 0 })
+      assert.deepEqual(calls, { aws: 0, cloudflare: 2, openai: 0, digitalocean: 0 })
       assert.equal(feed.providers.cloudflare.lastSyncedAt, '2026-10-08T20:00:00.000Z')
       assert.equal(feed.providers.aws.lastSyncedAt, '2026-10-08T19:00:00.000Z')
+    })
+    await t.test('Cloudflare trial plans stay visible as fixed commitments and subscription failures preserve them', async () => {
+      await call({ action: 'manual', mode: 'cloudflare-trial', providers: ['cloudflare'], now: '2026-10-08T21:00:00Z' })
+      const trial = (await call<StoredSubscription[]>({ action: 'subscriptions' })).find(row => row.provider === 'Cloudflare')
+      assert.equal(trial?.status, 'active')
+      const failed = await call({ action: 'manual', mode: 'cloudflare-subscription-error', providers: ['cloudflare'], now: '2026-10-08T22:00:00Z' })
+      assert.equal(failed.feed.providers.cloudflare.status, 'error')
+      assert.equal(failed.feed.providers.cloudflare.lastSyncedAt, '2026-10-08T21:00:00.000Z')
+      assert.equal(failed.feed.snapshots.filter(item => item.provider === 'cloudflare').length, 6)
+      const commitments = await call<StoredSubscription[]>({ action: 'subscriptions' })
+      const workers = commitments.filter(row => row.provider === 'Cloudflare')
+      assert.equal(workers.length, 1)
+      assert.equal(workers[0]?.amount, 12.34)
+    })
+    await t.test('Cloudflare plan updates apply until a user overrides fields, and deletion survives future syncs', async () => {
+      await call({ action: 'manual', mode: 'cloudflare-updated', providers: ['cloudflare'], now: '2026-10-08T23:00:00Z' })
+      const before = (await call<StoredSubscription[]>({ action: 'subscriptions' })).find(row => row.provider === 'Cloudflare')!
+      assert.equal(before.amount, 14.56)
+      assert.equal(before.nextRenewalAt, '2026-12-15')
+      const edited = await call<StoredSubscription>({ action: 'edit-subscription', id: before.id, revision: before.revision, subscription: { ...before, amount: 21.23, status: 'paused' } })
+      await call({ action: 'manual', mode: 'success', providers: ['cloudflare'], now: '2026-10-09T00:00:00Z' })
+      const preserved = (await call<StoredSubscription[]>({ action: 'subscriptions' })).find(row => row.id === before.id)!
+      assert.equal(preserved.amount, 21.23)
+      assert.equal(preserved.status, 'paused')
+      await call({ action: 'delete-subscription', id: edited.id, revision: preserved.revision })
+      await call({ action: 'manual', mode: 'success', providers: ['cloudflare'], now: '2026-10-09T01:00:00Z' })
+      assert.equal((await call<StoredSubscription[]>({ action: 'subscriptions' })).filter(row => row.provider === 'Cloudflare').length, 0)
     })
   } finally {
     workerProcess.kill('SIGTERM')

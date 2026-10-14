@@ -1,6 +1,8 @@
 import { createSubscription, normalizedTotals, type Subscription } from '../../src/domain/subscriptions.ts'
 import { isValidCostTimestamp, type CostProvider, type CostSnapshot } from '../../src/domain/usage-costs.ts'
 import { emptyCostFeed, parseCostFeed, type CostFeed, type ProviderSyncStatus } from '../../src/lib/cost-feed.ts'
+import { cloudflareCommitmentStatements } from './cloudflare-commitments.ts'
+import type { CloudflareSubscription } from '../providers/cloudflare-subscriptions.ts'
 
 export type StoredSubscription = Subscription & { revision: number }
 export const IMPORT_LIMIT = 1000
@@ -65,27 +67,33 @@ export async function createStoredSubscription(db: D1Database, input: unknown): 
     return fromRow(row)
   })
 }
-export async function patchStoredSubscription(db: D1Database, id: string, input: unknown, expectedRevision: unknown, afterUpdate?: (item: Subscription, revision: number) => Promise<D1PreparedStatement | null>): Promise<StoredSubscription> {
+export type SubscriptionStatements = D1PreparedStatement | readonly D1PreparedStatement[] | null
+
+function statementList(input: SubscriptionStatements): D1PreparedStatement[] {
+  return input === null ? [] : Array.isArray(input) ? [...input] : [input as D1PreparedStatement]
+}
+
+export async function patchStoredSubscription(db: D1Database, id: string, input: unknown, expectedRevision: unknown, afterUpdate?: (item: Subscription, revision: number) => Promise<SubscriptionStatements>): Promise<StoredSubscription> {
   const item = validateSubscription(input)
   const expected = revision(expectedRevision)
   if (item.id !== id) throw new LedgerError(400, 'Subscription ID cannot be changed.')
   return storage(async () => {
     const update = db.prepare(`UPDATE manual_subscriptions SET name = ?, provider = ?, amount = ?, currency = ?, recurrence_interval = ?, recurrence_unit = ?, next_renewal_at = ?, status = ?, revision = revision + 1 WHERE id = ? AND revision = ? RETURNING *`)
       .bind(...parameters(item).slice(1), id, expected)
-    const override = await afterUpdate?.(item, expected)
-    const row = override
-      ? (await db.batch<SubscriptionRow>([update, override]))[0]!.results[0]
+    const overrides = statementList(await afterUpdate?.(item, expected) ?? null)
+    const row = overrides.length
+      ? (await db.batch<SubscriptionRow>([update, ...overrides]))[0]!.results[0]
       : await update.first<SubscriptionRow>()
     if (row) return fromRow(row)
     const exists = await db.prepare('SELECT id FROM manual_subscriptions WHERE id = ?').bind(id).first()
     throw new LedgerError(exists ? 409 : 404, exists ? 'This subscription changed on another device. Reload before editing it.' : 'Subscription was not found.')
   })
 }
-export async function deleteStoredSubscription(db: D1Database, id: string, expectedRevision: unknown, beforeDelete?: (id: string, expectedRevision: number) => Promise<D1PreparedStatement | null>): Promise<{ deleted: true }> {
+export async function deleteStoredSubscription(db: D1Database, id: string, expectedRevision: unknown, beforeDelete?: (id: string, expectedRevision: number) => Promise<SubscriptionStatements>): Promise<{ deleted: true }> {
   const expected = revision(expectedRevision)
   return storage(async () => {
-    const exclusion = await beforeDelete?.(id, expected)
-    const statements = [...(exclusion ? [exclusion] : []), db.prepare('DELETE FROM manual_subscriptions WHERE id = ? AND revision = ? RETURNING id').bind(id, expected)]
+    const exclusions = statementList(await beforeDelete?.(id, expected) ?? null)
+    const statements = [...exclusions, db.prepare('DELETE FROM manual_subscriptions WHERE id = ? AND revision = ? RETURNING id').bind(id, expected)]
     const results = await db.batch(statements)
     const deleted = results[statements.length - 1]
     if (deleted?.results.length === 1) return { deleted: true }
@@ -125,7 +133,7 @@ export async function readCostFeed(db: D1Database): Promise<CostFeed> {
 }
 
 /** Each provider's observations and status commit together. Errors never replace its last success. */
-export async function persistProviderSync(db: D1Database, provider: CostProvider, input: readonly CostSnapshot[], status: ProviderSyncStatus): Promise<void> {
+export async function persistProviderSync(db: D1Database, provider: CostProvider, input: readonly CostSnapshot[], status: ProviderSyncStatus, cloudflareSubscriptions?: readonly CloudflareSubscription[]): Promise<void> {
   if (!['aws', 'cloudflare', 'openai', 'digitalocean'].includes(provider) || !isValidCostTimestamp(status.lastAttemptAt) || !['not-configured', 'synced', 'error'].includes(status.status)) throw new LedgerError(400, 'Invalid provider sync state.')
   const attemptedAt = new Date(status.lastAttemptAt).toISOString()
   if (status.status === 'synced' && (!isValidCostTimestamp(status.lastSyncedAt) || Date.parse(status.lastSyncedAt) !== Date.parse(attemptedAt))) throw new LedgerError(400, 'Invalid successful sync timestamp.')
@@ -135,8 +143,13 @@ export async function persistProviderSync(db: D1Database, provider: CostProvider
     if (snapshots.some(row => row.provider !== provider) || (status.status !== 'synced' && snapshots.length)) throw new Error('Invalid collection')
   } catch { throw new LedgerError(400, 'Invalid provider observations. Previous history was preserved.') }
   await storage(async () => {
+    if (cloudflareSubscriptions && (provider !== 'cloudflare' || status.status !== 'synced')) throw new LedgerError(400, 'Invalid Cloudflare subscription sync state.')
+    const commitments = provider === 'cloudflare' && status.status === 'synced'
+      ? await cloudflareCommitmentStatements(db, cloudflareSubscriptions ?? [], attemptedAt)
+      : []
     const statements = snapshots.map(row => db.prepare(`INSERT INTO cost_observations (id, provider, period_start, period_end, amount, currency, kind, captured_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
       .bind(row.id, row.provider, row.periodStart, row.periodEnd, row.amount, row.currency, row.kind, new Date(row.capturedAt).toISOString(), JSON.stringify(row.metadata ?? {})))
+    statements.push(...commitments)
     statements.push(db.prepare(`INSERT INTO provider_sync_status (provider, status, last_attempt_at, last_synced_at) VALUES (?, ?, ?, ?) ON CONFLICT(provider) DO UPDATE SET status = excluded.status, last_attempt_at = excluded.last_attempt_at, last_synced_at = CASE WHEN excluded.status = 'synced' THEN excluded.last_synced_at ELSE provider_sync_status.last_synced_at END WHERE provider_sync_status.last_attempt_at IS NULL OR excluded.last_attempt_at >= provider_sync_status.last_attempt_at`)
       .bind(provider, status.status, attemptedAt, status.status === 'synced' ? attemptedAt : null))
     await db.batch(statements)

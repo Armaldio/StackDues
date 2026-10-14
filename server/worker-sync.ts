@@ -1,6 +1,7 @@
 import { LedgerError, persistProviderSync, readCostFeed } from './data/ledger.ts'
 import { createAwsClient, fetchAwsCosts, type AwsClientCredentials, type AwsCostClient } from './providers/aws.ts'
 import { collectCloudflareCosts } from './providers/cloudflare.ts'
+import { fetchCloudflareSubscriptions, type CloudflareSubscription } from './providers/cloudflare-subscriptions.ts'
 import { collectOpenAiCosts } from './providers/openai.ts'
 import { collectDigitalOceanInvoices } from './providers/digitalocean.ts'
 import { loadProviderCredentials } from './security/provider-credentials.ts'
@@ -21,6 +22,7 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
   if (!env.DB || !Number.isFinite(now.getTime())) throw new LedgerError(503, 'Cost refresh is unavailable. Try again later.')
   if (!selectedProviders.length || selectedProviders.some(provider => !['aws', 'cloudflare', 'openai', 'digitalocean'].includes(provider)) || new Set(selectedProviders).size !== selectedProviders.length) throw new LedgerError(400, 'Choose one or more supported providers to refresh.')
   const load = dependencies.loadCredentials ?? loadProviderCredentials
+  const cloudflareSubscriptions = new Map<CostProvider, CloudflareSubscription[]>()
   async function connector(provider: CostProvider): Promise<CostConnector> {
     try {
       if (provider === 'aws') {
@@ -31,9 +33,14 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
       }
       if (provider === 'cloudflare') {
         const credentials = await load(env.DB, 'cloudflare', env.CREDENTIALS_KEY)
-        return { provider, configured: credentials !== null, collect: () => collectCloudflareCosts({
-          ...credentials!, now, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs,
-        }) }
+        return { provider, configured: credentials !== null, collect: async () => {
+          const [snapshots, subscriptions] = await Promise.all([
+            collectCloudflareCosts({ ...credentials!, now, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs }),
+            fetchCloudflareSubscriptions({ ...credentials!, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs }),
+          ])
+          cloudflareSubscriptions.set(provider, subscriptions)
+          return snapshots
+        } }
       }
       if (provider === 'openai') {
         const credentials = await load(env.DB, 'openai', env.CREDENTIALS_KEY)
@@ -55,7 +62,7 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
     const collected = await refreshCosts(emptyCostSyncState(), [await connector(provider)], now)
     // Commit only this provider's complete collection and status. The SQL preserves
     // last successful timestamps and rejects older overlapping status attempts.
-    await persistProviderSync(env.DB, provider, collected.snapshots, collected.providers[provider])
+    await persistProviderSync(env.DB, provider, collected.snapshots, collected.providers[provider], provider === 'cloudflare' ? cloudflareSubscriptions.get(provider) : undefined)
   }))
   if (results.some(result => result.status === 'rejected')) throw new LedgerError(503, 'Cost refresh could not be saved. Previous data has been preserved. Try again later.')
   return readCostFeed(env.DB)
