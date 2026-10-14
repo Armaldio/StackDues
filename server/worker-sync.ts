@@ -2,6 +2,7 @@ import { LedgerError, persistProviderSync, readCostFeed } from './data/ledger.ts
 import { createAwsClient, fetchAwsCosts, type AwsClientCredentials, type AwsCostClient } from './providers/aws.ts'
 import { collectCloudflareCosts } from './providers/cloudflare.ts'
 import { fetchCloudflareSubscriptions, type CloudflareSubscription } from './providers/cloudflare-subscriptions.ts'
+import { logCloudflareCollectionFailure } from './providers/cloudflare-diagnostics.ts'
 import { collectOpenAiCosts } from './providers/openai.ts'
 import { collectDigitalOceanInvoices } from './providers/digitalocean.ts'
 import { loadProviderCredentials } from './security/provider-credentials.ts'
@@ -15,6 +16,7 @@ export type CostSyncDependencies = {
   awsClient?: (credentials: AwsClientCredentials) => AwsCostClient
   fetch?: typeof fetch
   timeoutMs?: number
+  logCloudflareFailure?: (line: string) => void
 }
 
 /** Manual refresh and scheduled execution use the same collection and persistence path. */
@@ -34,12 +36,20 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
       if (provider === 'cloudflare') {
         const credentials = await load(env.DB, 'cloudflare', env.CREDENTIALS_KEY)
         return { provider, configured: credentials !== null, collect: async () => {
-          const [snapshots, subscriptions] = await Promise.all([
+          const [costResult, subscriptionResult] = await Promise.allSettled([
             collectCloudflareCosts({ ...credentials!, now, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs }),
             fetchCloudflareSubscriptions({ ...credentials!, fetch: dependencies.fetch, timeoutMs: dependencies.timeoutMs }),
           ])
-          cloudflareSubscriptions.set(provider, subscriptions)
-          return snapshots
+          if (costResult.status === 'rejected') {
+            logCloudflareCollectionFailure('billable_usage', costResult.reason, now.toISOString(), dependencies.logCloudflareFailure)
+          }
+          if (subscriptionResult.status === 'rejected') {
+            logCloudflareCollectionFailure('subscriptions', subscriptionResult.reason, now.toISOString(), dependencies.logCloudflareFailure)
+          }
+          if (costResult.status === 'rejected') throw costResult.reason
+          if (subscriptionResult.status === 'rejected') throw subscriptionResult.reason
+          cloudflareSubscriptions.set(provider, subscriptionResult.value)
+          return costResult.value
         } }
       }
       if (provider === 'openai') {
@@ -55,6 +65,9 @@ export async function syncCosts(env: CostSyncBindings, now = new Date(), depende
     } catch {
       // Missing/decryption-invalid keys are failed configuration, never absent credentials.
       // Credential loader errors and SQL details cannot enter provider state or logs.
+      if (provider === 'cloudflare') {
+        logCloudflareCollectionFailure('credentials', new Error('Provider credentials are unavailable.'), now.toISOString(), dependencies.logCloudflareFailure)
+      }
       return { provider, configured: true, collect: async () => { throw new Error('Provider credentials are unavailable.') } }
     }
   }

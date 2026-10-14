@@ -10,7 +10,7 @@ import type { CostFeed } from '../src/lib/cost-feed.ts'
 import { latestCostSnapshots } from '../src/domain/usage-costs.ts'
 import type { StoredSubscription } from '../server/data/ledger.ts'
 
-type WorkerSyncResponse = { feed: CostFeed; calls: { aws: number; cloudflare: number; openai: number; digitalocean: number }; message?: string }
+type WorkerSyncResponse = { feed: CostFeed; calls: { aws: number; cloudflare: number; openai: number; digitalocean: number }; diagnostics: { event: string; provider: string; stage: string; kind: string; attemptedAt: string }[]; message?: string }
 
 test('Worker sync isolates providers and commits honest observations in real D1', { timeout: 90_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'stackdues-sync-'))
@@ -100,6 +100,11 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       assert.equal(malformed.feed.providers.cloudflare.status, 'error')
       assert.equal(malformed.feed.providers.cloudflare.lastSyncedAt, '2026-10-08T16:00:00.000Z')
       assert.equal(malformed.feed.snapshots.filter(item => item.provider === 'cloudflare').length, 4)
+      assert.deepEqual(malformed.diagnostics, [{ event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'billable_usage', kind: 'invalid_response', attemptedAt: '2026-10-08T17:00:00.000Z' }])
+      const credentialsFailed = await call({ action: 'manual', mode: 'cloudflare-credential-error', providers: ['cloudflare'], now: '2026-10-08T17:15:00Z' })
+      assert.equal(credentialsFailed.feed.providers.cloudflare.status, 'error')
+      assert.equal(credentialsFailed.feed.providers.cloudflare.lastSyncedAt, '2026-10-08T16:00:00.000Z')
+      assert.deepEqual(credentialsFailed.diagnostics, [{ event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'credentials', kind: 'configuration', attemptedAt: '2026-10-08T17:15:00.000Z' }])
     })
     await t.test('a failed Cloudflare transaction does not block AWS or save partial Cloudflare history', async () => {
       await call({ action: 'sql', sql: "CREATE TRIGGER fail_sync BEFORE INSERT ON provider_sync_status WHEN NEW.provider = 'cloudflare' BEGIN SELECT RAISE(ABORT, 'TEST_FAKE_CLOUDFLARE_TOKEN database error'); END;" })
@@ -107,7 +112,7 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       const response = await fetch('http://127.0.0.1:8795/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'costs' }) })
       const feed = await response.json() as CostFeed
       assert.equal(feed.providers.aws.lastSyncedAt, '2026-10-08T18:00:00.000Z')
-      assert.equal(feed.providers.cloudflare.lastAttemptAt, '2026-10-08T17:00:00.000Z')
+      assert.equal(feed.providers.cloudflare.lastAttemptAt, '2026-10-08T17:15:00.000Z')
       assert.equal(feed.snapshots.filter(item => item.provider === 'cloudflare').length, 4)
       await call({ action: 'sql', sql: 'DROP TRIGGER fail_sync;' })
     })
@@ -134,10 +139,19 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       assert.equal(failed.feed.providers.cloudflare.status, 'error')
       assert.equal(failed.feed.providers.cloudflare.lastSyncedAt, '2026-10-08T21:00:00.000Z')
       assert.equal(failed.feed.snapshots.filter(item => item.provider === 'cloudflare').length, 6)
+      assert.deepEqual(failed.diagnostics, [{ event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'subscriptions', kind: 'authorization', attemptedAt: '2026-10-08T22:00:00.000Z' }])
       const commitments = await call<StoredSubscription[]>({ action: 'subscriptions' })
       const workers = commitments.filter(row => row.provider === 'Cloudflare')
       assert.equal(workers.length, 1)
       assert.equal(workers[0]?.amount, 12.34)
+      const bothFailed = await call({ action: 'manual', mode: 'cloudflare-both-error', providers: ['cloudflare'], now: '2026-10-08T22:30:00Z' })
+      assert.equal(bothFailed.feed.providers.cloudflare.status, 'error')
+      assert.equal(bothFailed.feed.providers.cloudflare.lastSyncedAt, '2026-10-08T21:00:00.000Z')
+      assert.equal(bothFailed.feed.snapshots.filter(item => item.provider === 'cloudflare').length, 6)
+      assert.deepEqual(bothFailed.diagnostics, [
+        { event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'billable_usage', kind: 'authorization', attemptedAt: '2026-10-08T22:30:00.000Z' },
+        { event: 'cloudflare_collection_failed', provider: 'cloudflare', stage: 'subscriptions', kind: 'authorization', attemptedAt: '2026-10-08T22:30:00.000Z' },
+      ])
     })
     await t.test('Cloudflare plan updates apply until a user overrides fields, and deletion survives future syncs', async () => {
       await call({ action: 'manual', mode: 'cloudflare-updated', providers: ['cloudflare'], now: '2026-10-08T23:00:00Z' })

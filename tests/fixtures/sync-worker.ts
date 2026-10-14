@@ -14,7 +14,7 @@ import type { loadProviderCredentials } from '../../server/security/provider-cre
 const awsCredentials = { accessKeyId: 'TESTACCESSKEY', secretAccessKey: 'TEST_FAKE_AWS_SECRET' }
 const cloudflareCredentials = { accountId: '023e105f4ecef8ad9ca31a8372d0c353', apiToken: 'TEST_FAKE_CLOUDFLARE_TOKEN' }
 const openAiCredentials = { adminApiKey: 'TEST_OPENAI_ADMIN_KEY' }
-type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
+type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-both-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'cloudflare-credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
 
 // Local-only fixture. Neither the SDK client nor fetch can contact real providers.
 export default {
@@ -33,12 +33,15 @@ export default {
       if (input.action === 'delete-subscription') return Response.json(await deleteStoredSubscription(env.DB, input.id!, input.revision, (id, revision) => cloudflareDeleteExclusionStatement(env.DB, id, revision)))
       const mode = input.mode ?? 'success'
       const calls = { aws: 0, cloudflare: 0, openai: 0, digitalocean: 0 }
+      const diagnostics: { event: string; provider: string; stage: string; kind: string; attemptedAt: string }[] = []
       const dependencies: CostSyncDependencies = {
         loadCredentials: (async (_db: D1Database, provider: string) => {
           if (mode === 'missing') return null
           if (mode === 'credential-error' && provider === 'aws') throw new Error('TEST_FAKE_AWS_SECRET decryption failed')
+          if (mode === 'cloudflare-credential-error' && provider === 'cloudflare') throw new Error('TEST_FAKE_CLOUDFLARE_TOKEN decryption failed')
           return provider === 'aws' ? awsCredentials : provider === 'cloudflare' ? cloudflareCredentials : provider === 'openai' ? openAiCredentials : { apiToken: 'TEST_DIGITALOCEAN_TOKEN' }
         }) as typeof loadProviderCredentials,
+        logCloudflareFailure: line => { diagnostics.push(JSON.parse(line)) },
         awsClient: credentials => {
           if (credentials.secretAccessKey !== awsCredentials.secretAccessKey) throw new Error('Unexpected fake credentials')
           return { async send(command) {
@@ -66,7 +69,7 @@ export default {
           calls.cloudflare++
           if ((init?.headers as Record<string, string>).Authorization !== `Bearer ${cloudflareCredentials.apiToken}`) throw new Error('Unexpected fake credentials')
           if (String(_url).includes('/subscriptions?')) {
-            if (mode === 'cloudflare-subscription-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
+            if (mode === 'cloudflare-subscription-error' || mode === 'cloudflare-both-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
             const plan = {
               id: '506e3185e9c882d175a2d0cb0093d9f2', currency: 'USD',
               current_period_start: '2026-10-15T00:00:00Z', current_period_end: mode === 'cloudflare-updated' ? '2026-12-15T00:00:00Z' : '2026-11-15T00:00:00Z',
@@ -75,7 +78,7 @@ export default {
             }
             return Response.json({ success: true, result: mode === 'empty-cloudflare' ? [] : [plan], result_info: { count: mode === 'empty-cloudflare' ? 0 : 1, page: 1, per_page: 100, total_count: mode === 'empty-cloudflare' ? 0 : 1 } })
           }
-          if (mode === 'cloudflare-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
+          if (mode === 'cloudflare-error' || mode === 'cloudflare-both-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
           return Response.json({ success: true, result: mode === 'empty-cloudflare' ? [] : [{
             BillingCurrency: 'USD', BillingPeriodStart: '2026-09-15T00:00:00Z',
             ChargePeriodStart: '2026-10-05T00:00:00Z', ChargePeriodEnd: '2026-10-06T00:00:00Z',
@@ -87,7 +90,7 @@ export default {
       }
       // Both execution triggers call this exact production function with their timestamp.
       const feed = await syncCosts({ DB: env.DB }, new Date(input.now ?? '2026-10-08T12:00:00Z'), dependencies, input.providers)
-      return Response.json({ feed, calls })
+      return Response.json({ feed, calls, diagnostics })
     } catch (error) {
       return Response.json({ message: error instanceof LedgerError ? error.message : 'Fixture request failed.' }, { status: error instanceof LedgerError ? error.statusCode : 500 })
     }
