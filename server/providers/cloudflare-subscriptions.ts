@@ -23,8 +23,7 @@ type CloudflareSubscriptionOptions = {
   timeoutMs?: number
 }
 
-const PAGE_SIZE = 100
-const MAX_PAGES = 10
+const MAX_RESULTS = 1000
 const frequencies: Record<string, { interval: number; unit: RecurrenceUnit }> = {
   weekly: { interval: 1, unit: 'week' },
   monthly: { interval: 1, unit: 'month' },
@@ -122,47 +121,29 @@ export async function fetchCloudflareSubscriptions(options: CloudflareSubscripti
   const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 15_000, 1), 30_000)
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const fetcher = options.fetch ?? fetch
-  const records: unknown[] = []
-  let expectedCount: number | null = null
   try {
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const url = `https://api.cloudflare.com/client/v4/accounts/${options.accountId}/subscriptions?page=${page}&per_page=${PAGE_SIZE}`
-      let payload: unknown
-      try {
-        const response = await fetcher(url, {
-          headers: { Authorization: `Bearer ${options.apiToken}`, Accept: 'application/json' },
-          signal: controller.signal,
-        })
-        if (response.status === 401 || response.status === 403) throw new Error('Cloudflare authorization failed. Check the server token and Billing Read permission.')
-        if (!response.ok) throw new Error(`Cloudflare HTTP status ${response.status}.`)
-        payload = await response.json()
-      } catch (error) {
-        if (error instanceof Error && (error.message === 'Cloudflare authorization failed. Check the server token and Billing Read permission.'
-          || /^Cloudflare HTTP status [1-5]\d{2}\.$/.test(error.message))) throw error
-        throw new Error('Cloudflare request failed.')
-      }
+    const response = await fetcher(`https://api.cloudflare.com/client/v4/accounts/${options.accountId}/subscriptions`, {
+      headers: { Authorization: `Bearer ${options.apiToken}`, Accept: 'application/json' },
+      signal: controller.signal,
+    })
+    if (response.status === 401 || response.status === 403) throw new Error('Cloudflare authorization failed. Check the server token and Billing Read permission.')
+    if (!response.ok) throw new Error(`Cloudflare HTTP status ${response.status}.`)
 
-      const envelope = object(payload)
-      if (envelope.success !== true) throw new Error('Cloudflare provider rejected the request.')
-      if (!Array.isArray(envelope.result)) invalidData()
-      const pageRows = envelope.result
-      const info = envelope.result_info === undefined ? null : object(envelope.result_info)
-      if (info) {
-        if (info.count !== undefined && info.count !== pageRows.length) throw new Error('Cloudflare returned incomplete subscription data.')
-        if (info.total_count !== undefined) {
-          if (!Number.isSafeInteger(info.total_count) || (info.total_count as number) < 0) invalidData()
-          if (expectedCount !== null && expectedCount !== info.total_count) throw new Error('Cloudflare returned incomplete subscription data.')
-          expectedCount = info.total_count as number
-        }
-        if (info.page !== undefined && info.page !== page) throw new Error('Cloudflare returned incomplete subscription data.')
+    const envelope = object(await response.json())
+    if (envelope.success !== true) throw new Error('Cloudflare provider rejected the request.')
+    if (!Array.isArray(envelope.result)) invalidData()
+    const records = envelope.result
+    const info = envelope.result_info === undefined ? null : object(envelope.result_info)
+    if (info) {
+      if (info.count !== undefined && info.count !== records.length) throw new Error('Cloudflare returned incomplete subscription data.')
+      if (info.total_count !== undefined) {
+        if (!Number.isSafeInteger(info.total_count) || (info.total_count as number) < 0) invalidData()
+        if (info.total_count !== records.length) throw new Error('Cloudflare returned incomplete subscription data.')
       }
-      records.push(...pageRows)
-      if (records.length > 1000) throw new Error('Cloudflare returned incomplete subscription data.')
-      if (expectedCount !== null && records.length > expectedCount) throw new Error('Cloudflare returned incomplete subscription data.')
-      if (expectedCount !== null ? records.length === expectedCount : pageRows.length < (typeof info?.per_page === 'number' ? info.per_page : PAGE_SIZE)) return normalizeSubscriptions(records)
-      if (pageRows.length === 0) throw new Error('Cloudflare returned incomplete subscription data.')
-      if (page === MAX_PAGES) throw new Error('Cloudflare returned incomplete subscription data.')
+      if (info.page !== undefined && info.page !== 1) throw new Error('Cloudflare returned incomplete subscription data.')
     }
+    if (records.length > MAX_RESULTS) throw new Error('Cloudflare returned incomplete subscription data.')
+    return normalizeSubscriptions(records)
   } catch (error) {
     if (controller.signal.aborted) throw new Error('Cloudflare request timed out.')
     if (error instanceof Error && (error.message.startsWith('Cloudflare authorization failed.') || error.message.startsWith('Cloudflare request failed.')

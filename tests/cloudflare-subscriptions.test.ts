@@ -25,6 +25,7 @@ test('Cloudflare discovers active Workers plans as fixed subscriptions with prov
   const subscriptions = await fetchCloudflareSubscriptions({ accountId, apiToken, fetch: async (url, init) => {
     urls.push(String(url))
     assert.equal((init?.headers as Record<string, string>).Authorization, `Bearer ${apiToken}`)
+    if (new URL(String(url)).search) return new Response('unsupported query parameters', { status: 400 })
     return response([workerPlan, {
       ...workerPlan,
       id: 'a06e3185e9c882d175a2d0cb0093d9f1',
@@ -32,7 +33,7 @@ test('Cloudflare discovers active Workers plans as fixed subscriptions with prov
     }])
   } })
 
-  assert.deepEqual(urls, [`https://api.cloudflare.com/client/v4/accounts/${accountId}/subscriptions?page=1&per_page=100`])
+  assert.deepEqual(urls, [`https://api.cloudflare.com/client/v4/accounts/${accountId}/subscriptions`])
   assert.deepEqual(subscriptions, [{
     externalId: workerPlan.id,
     state: 'Paid',
@@ -78,7 +79,7 @@ test('Cloudflare keeps trial and provisioned plans visible as upcoming fixed com
   }
 })
 
-test('Cloudflare rejects incomplete pages instead of silently omitting account subscriptions', async () => {
+test('Cloudflare rejects incomplete account responses instead of silently omitting subscriptions', async () => {
   const results = Array.from({ length: 100 }, (_, index) => ({ ...workerPlan, id: `${String(index).padStart(32, '0')}` }))
   await assert.rejects(fetchCloudflareSubscriptions({ accountId, apiToken, fetch: async () => response(results, 101) }), /incomplete subscription data/)
   await assert.rejects(fetchCloudflareSubscriptions({ accountId, apiToken, fetch: async () => response([workerPlan], 0) }), /incomplete subscription data/)

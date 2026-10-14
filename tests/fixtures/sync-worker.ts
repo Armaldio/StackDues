@@ -68,7 +68,8 @@ export default {
           }
           calls.cloudflare++
           if ((init?.headers as Record<string, string>).Authorization !== `Bearer ${cloudflareCredentials.apiToken}`) throw new Error('Unexpected fake credentials')
-          if (String(_url).includes('/subscriptions?')) {
+          if (String(_url).includes('/subscriptions')) {
+            if (new URL(String(_url)).search) return new Response('TEST_FAKE_CLOUDFLARE_TOKEN query rejected', { status: 400 })
             if (mode === 'cloudflare-subscription-not-found') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN endpoint detail', { status: 404 })
             if (mode === 'cloudflare-subscription-error' || mode === 'cloudflare-both-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
             const plan = {
