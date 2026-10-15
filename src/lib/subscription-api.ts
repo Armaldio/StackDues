@@ -1,4 +1,4 @@
-import { createSubscription, normalizedTotals, type Subscription } from '../domain/subscriptions.ts'
+import { createSubscription, normalizedTotals, type Subscription, type SubscriptionOrigin } from '../domain/subscriptions.ts'
 
 export type StoredSubscription = Subscription & { revision: number }
 export type ImportResult = { subscriptions: StoredSubscription[]; createdIds: string[] }
@@ -31,7 +31,11 @@ export function parseStoredSubscriptions(value: unknown): StoredSubscription[] {
     if (!record || typeof record !== 'object' || !('revision' in record) || !Number.isSafeInteger(record.revision) || (record.revision as number) < 1) {
       throw new Error('The server returned an invalid subscription revision. Reload before making changes.')
     }
-    return { ...createSubscription(record as unknown as Subscription), revision: record.revision as number }
+    const origin = 'origin' in record ? record.origin : 'manual'
+    if (!['manual', 'cloudflare-auto', 'cloudflare-linked', 'hostinger-auto', 'hostinger-linked'].includes(String(origin))) {
+      throw new Error('The server returned an invalid subscription origin. Reload before making changes.')
+    }
+    return { ...createSubscription(record as unknown as Subscription), revision: record.revision as number, origin: origin as SubscriptionOrigin }
   })
   if (new Set(records.map(({ id }) => id)).size !== records.length) throw new Error('The server returned duplicate subscriptions.')
   normalizedTotals(records)

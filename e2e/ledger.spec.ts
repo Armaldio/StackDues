@@ -206,6 +206,25 @@ test('Overview shows per-currency known spend, forecast completeness and the nex
   }
 })
 
+test('Overview and Services identify auto-discovered renewals separately from manual subscriptions', async ({ page }) => {
+  const today = new Date().toISOString().slice(0, 10)
+  const nextDate = (days: number) => { const date = new Date(`${today}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+  await mockLedger(page, [
+    { id: 'workers-paid', name: 'Workers Paid', provider: 'Cloudflare', billingType: 'fixed', amount: 5, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(8), status: 'active', revision: 1, origin: 'cloudflare-auto' },
+    { id: 'manual-plan', name: 'Manual plan', billingType: 'fixed', amount: 10, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: nextDate(9), status: 'active', revision: 1, origin: 'manual' },
+  ])
+
+  await page.goto('/')
+  const renewals = page.locator('.overview-renewal-list li')
+  await expect(renewals.filter({ hasText: 'Workers Paid' }).getByText('Auto-discovered', { exact: true })).toBeVisible()
+  await expect(renewals.filter({ hasText: 'Manual plan' }).getByText('Manual', { exact: true })).toBeVisible()
+
+  await page.goto('/services')
+  const inventory = page.locator('.service-inventory')
+  await expect(inventory.locator('.subscription-inventory-card').filter({ hasText: 'Workers Paid' }).getByText('Auto-discovered', { exact: true })).toBeVisible()
+  await expect(inventory.locator('.subscription-inventory-card').filter({ hasText: 'Manual plan' }).getByText('Manual', { exact: true })).toBeVisible()
+})
+
 test('Overview keeps known spending visible during provider errors and stale data', async ({ page }) => {
   const now = new Date()
   const today = now.toISOString().slice(0, 10)

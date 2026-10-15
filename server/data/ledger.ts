@@ -1,4 +1,4 @@
-import { createSubscription, normalizedTotals, type Subscription } from '../../src/domain/subscriptions.ts'
+import { createSubscription, normalizedTotals, type Subscription, type SubscriptionOrigin } from '../../src/domain/subscriptions.ts'
 import { isValidCostTimestamp, type CostProvider, type CostSnapshot } from '../../src/domain/usage-costs.ts'
 import { emptyCostFeed, parseCostFeed, type CostFeed, type ProviderSyncStatus } from '../../src/lib/cost-feed.ts'
 import { cloudflareCommitmentStatements } from './cloudflare-commitments.ts'
@@ -15,11 +15,19 @@ export class LedgerError extends Error {
 type SubscriptionRow = {
   id: string; name: string; provider: string | null; amount: number; currency: string
   recurrence_interval: number; recurrence_unit: Subscription['recurrenceUnit']; next_renewal_at: string
-  status: Subscription['status']; revision: number
+  status: Subscription['status']; revision: number; origin?: SubscriptionOrigin
 }
 type ObservationRow = { id: string; provider: CostProvider; period_start: string; period_end: string; amount: number; currency: string; kind: CostSnapshot['kind']; captured_at: string; metadata_json: string }
 type StatusRow = { provider: CostProvider; status: ProviderSyncStatus['status']; last_attempt_at: string | null; last_synced_at: string | null }
-const selectSubscriptions = 'SELECT * FROM manual_subscriptions ORDER BY name, id'
+const selectSubscriptions = `SELECT m.*,
+  CASE
+    WHEN EXISTS (SELECT 1 FROM cloudflare_fixed_subscription_links l WHERE l.subscription_id = m.id AND l.automatic = 1) THEN 'cloudflare-auto'
+    WHEN EXISTS (SELECT 1 FROM cloudflare_fixed_subscription_links l WHERE l.subscription_id = m.id) THEN 'cloudflare-linked'
+    WHEN EXISTS (SELECT 1 FROM hostinger_subscription_links l WHERE l.subscription_id = m.id AND l.automatic = 1) THEN 'hostinger-auto'
+    WHEN EXISTS (SELECT 1 FROM hostinger_subscription_links l WHERE l.subscription_id = m.id) THEN 'hostinger-linked'
+    ELSE 'manual'
+  END AS origin
+  FROM manual_subscriptions m ORDER BY m.name, m.id`
 const insertSubscription = `INSERT INTO manual_subscriptions (id, name, provider, amount, currency, recurrence_interval, recurrence_unit, next_renewal_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 function validateSubscription(value: unknown): Subscription {
@@ -38,7 +46,7 @@ function parameters(subscription: Subscription): (string | number | null)[] {
 }
 function fromRow(row: SubscriptionRow): StoredSubscription {
   const item = createSubscription({ id: row.id, name: row.name, ...(row.provider === null ? {} : { provider: row.provider }), billingType: 'fixed', amount: row.amount, currency: row.currency, recurrenceInterval: row.recurrence_interval, recurrenceUnit: row.recurrence_unit, nextRenewalAt: row.next_renewal_at, status: row.status })
-  return { ...item, revision: revision(row.revision) }
+  return { ...item, revision: revision(row.revision), origin: row.origin ?? 'manual' }
 }
 async function storage<T>(operation: () => Promise<T>): Promise<T> {
   try { return await operation() }

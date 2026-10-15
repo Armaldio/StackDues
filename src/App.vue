@@ -11,6 +11,7 @@ import SpendingTimeline from './components/SpendingTimeline.vue'
 import ServiceInventory from './components/ServiceInventory.vue'
 import type { ServiceSelection } from './domain/service-selection'
 import { nextDistinctRenewals, nextRenewalOnOrAfter, normalizeCost, normalizedTotals, renewalChargeTotals, upcomingRenewals, type Subscription } from './domain/subscriptions'
+import { subscriptionOriginLabel } from './domain/subscription-origin'
 import { currentCostSnapshots, emptyCostFeed, fetchCostFeed, isProviderStale, CostFeedReadError } from './lib/cost-feed'
 import { trackedSpendingTotals, usageTotals, type CostProvider } from './domain/usage-costs'
 import { overviewInsights } from './domain/overview-insights'
@@ -417,7 +418,9 @@ async function save(item: Subscription) {
   try {
     const saved = editing.value ? await updateStoredSubscription(item, editing.value.revision) : await createStoredSubscription(item)
     if (saved.id !== item.id) throw new Error('The saved subscription could not be confirmed. Reload before making changes.')
-    subscriptions.value = subscriptions.value.some(({ id }) => id === saved.id) ? subscriptions.value.map(existing => existing.id === saved.id ? saved : existing) : [...subscriptions.value, saved]
+    const existing = subscriptions.value.find(({ id }) => id === saved.id)
+    const savedWithOrigin = { ...saved, origin: existing?.origin ?? saved.origin ?? 'manual' as const }
+    subscriptions.value = existing ? subscriptions.value.map(row => row.id === saved.id ? savedWithOrigin : row) : [...subscriptions.value, savedWithOrigin]
     storageError.value = null; formSaveFailure.value = null; formRecoveryNotice.value = ''; notice.value = `${item.name} saved.`; await closeForm()
   } catch (cause) {
     formSaveFailure.value = cause instanceof SubscriptionRequestFailure
@@ -484,7 +487,7 @@ async function setStatus(item: StoredSubscription) {
   try {
     const saved = await updateStoredSubscription({ ...item, status }, item.revision)
     if (saved.id !== item.id) throw new Error('The saved subscription could not be confirmed. Reload before making changes.')
-    subscriptions.value = subscriptions.value.map(existing => existing.id === item.id ? saved : existing)
+    subscriptions.value = subscriptions.value.map(existing => existing.id === item.id ? { ...saved, origin: item.origin ?? saved.origin ?? 'manual' } : existing)
     notice.value = `${item.name} ${status === 'active' ? 'resumed' : 'paused'}.`
   } catch (cause) { mutationError(cause) }
   finally { busy.value = false }
@@ -574,7 +577,7 @@ function setCloudflareRegistrarState(state: CloudflareRegistrarState) { financia
         <p v-if="paymentScheduleReadState === 'pending'" class="metric-note" role="status">Checking saved subscriptions and provider coverage; any listed renewals are known saved commitments.</p>
         <p v-else-if="['unavailable', 'expired'].includes(paymentScheduleReadState)" class="metric-note" role="status">Provider or subscription data is unavailable; any listed renewals are known saved commitments and the full schedule is unconfirmed.</p>
         <div class="current-month-schedule" aria-labelledby="current-month-schedule-title"><div><h3 id="current-month-schedule-title">Scheduled fixed charges left in {{ currentMonthLabel }}</h3><p>Upcoming renewal amounts only; excludes provider usage and charges dated earlier this month.</p></div><ul v-if="currentMonthRenewalTotals.length"><li v-for="total in currentMonthRenewalTotals" :key="total.currency"><span>{{ total.currency }}</span><strong>{{ money(total.amount, total.currency) }}</strong></li></ul><p v-else-if="['available', 'empty'].includes(paymentScheduleReadState)" class="current-month-empty">No active fixed renewals remain this month.</p><p v-else class="current-month-empty" role="status">This month’s schedule is not fully confirmed.</p></div>
-        <ul v-if="upcomingCharges.length" class="overview-renewal-list"><li v-for="charge in upcomingCharges" :key="`${charge.subscription.id}-${charge.date}`"><button class="overview-renewal-name service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: charge.subscription.id }, $event)">{{ charge.subscription.name }}<span>{{ charge.subscription.provider || 'Fixed subscription' }}</span></button><span class="overview-renewal-date">{{ dateLabel(charge.date) }}</span><strong class="overview-renewal-amount">{{ money(charge.amount, charge.currency) }}</strong></li></ul>
+        <ul v-if="upcomingCharges.length" class="overview-renewal-list"><li v-for="charge in upcomingCharges" :key="`${charge.subscription.id}-${charge.date}`"><button class="overview-renewal-name service-detail-trigger" type="button" @click="openServiceDetails({ kind: 'subscription', id: charge.subscription.id }, $event)">{{ charge.subscription.name }}<span class="overview-renewal-source"><span>{{ charge.subscription.provider || 'Fixed subscription' }}</span><span class="subscription-origin-tag">{{ subscriptionOriginLabel(charge.subscription.origin) }}</span></span></button><span class="overview-renewal-date">{{ dateLabel(charge.date) }}</span><strong class="overview-renewal-amount">{{ money(charge.amount, charge.currency) }}</strong></li></ul>
         <p v-else-if="paymentScheduleReadState === 'pending'" class="quiet-empty" role="status">The upcoming schedule is still loading.</p>
         <p v-else-if="['unavailable', 'expired'].includes(paymentScheduleReadState)" class="quiet-empty" role="status">Upcoming renewals could not be fully confirmed because saved subscription or provider data is unavailable.</p>
         <p v-else class="quiet-empty">No active renewal is scheduled in the next year.</p>

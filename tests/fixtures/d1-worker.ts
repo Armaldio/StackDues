@@ -1,5 +1,15 @@
-import migration from '../../migrations/0002_ledger.sql'
+import ledgerMigration from '../../migrations/0002_ledger.sql'
+import hostingerDiscoveryMigration from '../../migrations/0004_hostinger_discovery.sql'
+import hostingerAutomaticMigration from '../../migrations/0005_hostinger_auto_commitments.sql'
+import cloudflareCommitmentsMigration from '../../migrations/0010_cloudflare_fixed_commitments.sql'
 import { createStoredSubscription, deleteStoredSubscription, importSubscriptions, LedgerError, listSubscriptions, patchStoredSubscription, persistProviderSync, readCostFeed } from '../../server/data/ledger.ts'
+
+const migrations = [ledgerMigration, hostingerDiscoveryMigration, hostingerAutomaticMigration, cloudflareCommitmentsMigration]
+
+async function applyMigration(db: D1Database, migration: string) {
+  // D1 exec accepts one complete statement per line; keep trigger bodies intact.
+  await db.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
+}
 
 // Local workerd-only fixture: never imported by the application's Worker.
 export default {
@@ -7,8 +17,7 @@ export default {
     const { action, ...input } = await request.json() as Record<string, any>
     try {
       if (action === 'initialize') {
-        // D1 exec accepts one complete statement per line; keep trigger bodies intact.
-        await env.DB.exec(migration.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
+        for (const migration of migrations) await applyMigration(env.DB, migration)
         return Response.json({ ready: true })
       }
       if (action === 'list') return Response.json(await listSubscriptions(env.DB))

@@ -66,6 +66,7 @@ test('Worker sync isolates providers and commits honest observations in real D1'
       assert.deepEqual({ name: workers[0]?.name, amount: workers[0]?.amount, currency: workers[0]?.currency, interval: workers[0]?.recurrenceInterval, unit: workers[0]?.recurrenceUnit, next: workers[0]?.nextRenewalAt, status: workers[0]?.status }, {
         name: 'Workers Paid Plan', amount: 12.34, currency: 'USD', interval: 1, unit: 'month', next: '2026-11-15', status: 'active',
       })
+      assert.equal(workers[0]?.origin, 'cloudflare-auto')
       const scheduled = await call({ action: 'scheduled', mode: 'success', now: '2026-10-08T13:00:00Z' })
       assert.deepEqual(scheduled.feed, manual.feed)
       const repeated = await call<StoredSubscription[]>({ action: 'subscriptions' })

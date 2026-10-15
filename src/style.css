@@ -133,6 +133,10 @@ main { width: 100%; max-width: 1440px; padding: 3rem 3rem 1.5rem; }
 .overview-renewal-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; padding: .75rem .5rem; border-bottom: 1px solid var(--line); background: var(--surface); }
 .overview-renewal-name { text-align: left; font-weight: 600; }
 .overview-renewal-name span { display: block; color: var(--muted); font-size: .75rem; font-weight: 400; }
+.overview-renewal-name .overview-renewal-source { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; margin-top: .15rem; }
+.overview-renewal-name .overview-renewal-source > span { display: inline-block; }
+.overview-renewal-name .overview-renewal-source .subscription-origin-tag { color: var(--ink); font-weight: 600; }
+.subscription-origin-tag { display: inline-flex; align-items: center; padding: .08rem .4rem; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink); font-size: .75rem; font-weight: 600; line-height: 1.4; white-space: nowrap; }
 .overview-renewal-date { color: var(--muted); font-size: .76rem; white-space: nowrap; }
 .overview-renewal-amount { font-family: var(--mono); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .overview-featured-insight .insight-card { padding: .9rem 1.1rem; }

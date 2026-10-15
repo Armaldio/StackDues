@@ -1,11 +1,14 @@
 export type RecurrenceUnit = 'day' | 'week' | 'month' | 'year'
 export type SubscriptionStatus = 'active' | 'paused' | 'cancelled'
+export type SubscriptionOrigin = 'manual' | 'cloudflare-auto' | 'cloudflare-linked' | 'hostinger-auto' | 'hostinger-linked'
 
 /** A fixed commitment. Metered provider spend belongs in a separate model. */
 export type Subscription = {
   id: string
   name: string
   provider?: string
+  /** Read-only provenance derived from provider link records; never persisted as ledger input. */
+  origin?: SubscriptionOrigin
   billingType: 'fixed'
   amount: number
   currency: string

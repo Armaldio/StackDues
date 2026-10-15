@@ -1,11 +1,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, parseStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME } from '../src/lib/subscription-api.ts'
+import { subscriptionOriginLabel } from '../src/domain/subscription-origin.ts'
 const item = { id: 'legacy', name: 'Bitwarden', billingType: 'fixed' as const, amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year' as const, nextRenewalAt: '2026-10-08', status: 'active' as const }
 
 test('server ledger rejects corrupted revisions, duplicate ids and invalid financial records', () => {
-  assert.deepEqual(parseStoredSubscriptions([{ ...item, revision: 2 }]), [{ ...item, provider: undefined, revision: 2 }])
+  assert.deepEqual(parseStoredSubscriptions([{ ...item, revision: 2 }]), [{ ...item, provider: undefined, revision: 2, origin: 'manual' }])
   for (const value of [null, [{ ...item, revision: 0 }], [{ ...item, revision: 1.5 }], [{ ...item, revision: 1 }, { ...item, revision: 1 }], [{ ...item, amount: Infinity, revision: 1 }]]) assert.throws(() => parseStoredSubscriptions(value))
+})
+test('server ledger preserves provider discovery provenance for renewal labels', () => {
+  assert.equal(parseStoredSubscriptions([{ ...item, revision: 1, origin: 'cloudflare-auto' }])[0]?.origin, 'cloudflare-auto')
+  assert.equal(parseStoredSubscriptions([{ ...item, revision: 1 }])[0]?.origin, 'manual')
+  assert.throws(() => parseStoredSubscriptions([{ ...item, revision: 1, origin: 'unknown-source' }]), /origin/)
+  assert.deepEqual((['cloudflare-auto', 'cloudflare-linked', 'hostinger-auto', 'hostinger-linked', 'manual'] as const).map(origin => subscriptionOriginLabel(origin)), [
+    'Auto-discovered', 'Linked to Cloudflare', 'Auto-discovered', 'Linked to Hostinger', 'Manual',
+  ])
 })
 test('database/network/session failures never become an empty successful ledger or leak raw errors', async t => {
   for (const status of [401, 409, 503]) {

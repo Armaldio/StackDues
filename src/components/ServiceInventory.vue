@@ -5,6 +5,7 @@ import type { HostingerDiscoveryRow } from '../lib/hostinger-api'
 import type { CloudflareRegistration } from '../lib/cloudflare-registrar-api'
 import type { CostProvider } from '../domain/usage-costs'
 import type { ProviderPresentation } from '../domain/provider-presentation'
+import { subscriptionOriginLabel } from '../domain/subscription-origin'
 
 export type InventoryProvider = { id: CostProvider | 'hostinger'; name: string; status: string; summary: string; searchTerms?: string; presentation: ProviderPresentation; lastSyncedAt?: string }
 const props = defineProps<{
@@ -35,12 +36,6 @@ const visibleProviders = computed(() => entryKind.value !== 'fixed' && entryKind
 const visibleDiscovered = computed(() => entryKind.value !== 'fixed' && entryKind.value !== 'provider' ? props.discovered.filter(item => !item.linkedSubscriptionId && `${item.name} Hostinger ${item.status} ${item.currency} ${item.renewalPrice ?? ''} ${item.excluded ? 'excluded uncounted' : item.renewalAvailable ? 'needs review uncounted' : 'unavailable uncounted'}`.toLocaleLowerCase().includes(normalizedQuery.value)) : [])
 const visibleRegistrations = computed(() => entryKind.value !== 'fixed' && entryKind.value !== 'provider' ? props.registrarRegistrations.filter(item => `${item.domainName} Cloudflare Registrar ${item.status} ${item.autoRenew ? 'auto renew enabled' : 'auto renew off'} ${item.expiresAt ?? ''}`.toLocaleLowerCase().includes(normalizedQuery.value)) : [])
 const visibleCount = computed(() => visibleSubscriptions.value.length + visibleProviders.value.length + visibleDiscovered.value.length + visibleRegistrations.value.length)
-function hostingerOrigin(id: string) {
-  const linked = props.discovered.find(item => item.linkedSubscriptionId === id)
-  if (linked?.automaticallyLinked) return 'Added automatically from the Hostinger connection.'
-  if (linked) return 'Manually saved subscription · linked to this Hostinger service.'
-  return 'Manually saved subscription · not linked to the Hostinger connection.'
-}
 function timestamp(value?: string) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '' }
 </script>
 
@@ -62,7 +57,7 @@ function timestamp(value?: string) { return value ? new Intl.DateTimeFormat(unde
       <div class="inventory-grid" role="list" aria-label="Fixed subscriptions">
       <article v-for="item in visibleSubscriptions" :key="`sub-${item.id}`" class="inventory-card subscription-inventory-card" role="listitem">
         <header><div><p class="eyebrow">{{ item.provider || 'Fixed subscription' }}</p><h3><button class="service-detail-trigger" type="button" @click="emit('details', { kind: 'subscription', id: item.id })">{{ item.name }}</button></h3></div><span class="status-pill" :class="`status-${item.status}`">{{ item.status }}</span></header>
-        <p v-if="item.provider?.toLowerCase() === 'hostinger'" class="inventory-origin">{{ hostingerOrigin(item.id) }}</p>
+        <p class="inventory-origin"><span class="subscription-origin-tag">{{ subscriptionOriginLabel(item.origin) }}</span></p>
         <dl><div><dt>Charge / cycle</dt><dd>{{ formatMoney(item.amount, item.currency) }} · {{ recurrence(item) }}</dd></div><div><dt>Monthly equivalent</dt><dd>{{ formatMoney(monthly(item), item.currency) }}</dd></div><div><dt>Next renewal</dt><dd>{{ renewal(item) }}</dd></div></dl>
         <div class="row-actions"><button class="text-button" :disabled="blocked" :aria-label="`Edit ${item.name}`" @click="emit('edit', item)">Edit</button><button class="text-button" :disabled="blocked" :aria-label="`${item.status === 'active' ? 'Pause' : 'Resume'} ${item.name} in subscriptions`" @click="emit('toggle', item)">{{ item.status === 'active' ? 'Pause' : 'Resume' }}</button><button class="text-button delete-button" :disabled="blocked" :aria-label="`Delete ${item.name}`" @click="emit('remove', item)">Delete</button></div>
       </article>

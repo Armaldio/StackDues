@@ -5,7 +5,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 const fixed = [
-  { id: 'euro-plan', name: 'Euro Plan', provider: 'Hostinger', billingType: 'fixed', amount: 37.99, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: '2026-11-12', status: 'active', revision: 1 },
+  { id: 'euro-plan', name: 'Euro Plan', provider: 'Hostinger', billingType: 'fixed', amount: 37.99, currency: 'EUR', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: '2026-11-12', status: 'active', revision: 1, origin: 'hostinger-linked' },
   { id: 'paused-domain', name: 'Paused Domain', provider: 'Manual', billingType: 'fixed', amount: 18, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2027-01-12', status: 'paused', revision: 1 },
 ]
 const hostingerRows = [
@@ -32,7 +32,7 @@ test('Services inventory searches fixed and provider entries, marks discoveries 
   await expect(inventory.locator('.inventory-card').filter({ hasText: 'Euro Plan' })).toContainText('Monthly equivalent')
   await expect(inventory.getByRole('heading', { name: /Fixed subscriptions 2/ })).toBeVisible()
   await expect(inventory.getByRole('heading', { name: /Provider accounts 5/ })).toBeVisible()
-  await expect(inventory.locator('.subscription-inventory-card').filter({ hasText: 'Euro Plan' })).toContainText('Manually saved subscription · linked to this Hostinger service.')
+  await expect(inventory.locator('.subscription-inventory-card').filter({ hasText: 'Euro Plan' }).getByText('Linked to Hostinger', { exact: true })).toBeVisible()
   await expect(inventory.locator('.subscription-inventory-card').filter({ hasText: 'Euro Plan' })).toHaveCount(1)
   await expect(inventory.locator('.inventory-card').filter({ hasText: 'Candidate Hosting' })).toContainText('Needs review')
   await expect(inventory.locator('.inventory-card').filter({ hasText: 'Candidate Hosting' })).toContainText('not included in fixed commitments')
