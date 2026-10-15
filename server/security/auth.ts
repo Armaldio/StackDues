@@ -1,7 +1,8 @@
 import { jwtVerify, SignJWT } from 'jose'
 
 export const SESSION_COOKIE = '__Host-stackdues_session'
-export const SESSION_MAX_AGE = 8 * 60 * 60
+export const SESSION_MAX_AGE = 30 * 24 * 60 * 60
+export const LEGACY_SESSION_MAX_AGE = 8 * 60 * 60
 const issuer = 'https://dues.armaldio.xyz'
 const audience = 'stackdues'
 const iterations = 100_000
@@ -96,7 +97,8 @@ export async function verifySession(
       requiredClaims: ['exp', 'iat', 'sub', 'version'], currentDate: now,
     })
     if (payload.aud !== audience || typeof payload.iat !== 'number' || typeof payload.exp !== 'number'
-      || payload.iat > Math.floor(now.getTime() / 1000) || payload.exp - payload.iat !== SESSION_MAX_AGE
+      || payload.iat > Math.floor(now.getTime() / 1000)
+      || ![SESSION_MAX_AGE, LEGACY_SESSION_MAX_AGE].includes(payload.exp - payload.iat)
       || payload.version !== await credentialVersion(config.passwordHash)) return null
     let sessionId: string
     if (payload.jti === undefined) {

@@ -49,10 +49,11 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.equal(registered.status, 303, await registered.clone().text())
     const setCookie = registered.headers.get('set-cookie')!
     assert.match(setCookie, /__Host-stackdues_session=/); assert.match(setCookie, /Secure; HttpOnly; SameSite=Strict/)
-    assert.match(setCookie, /Path=\//); assert.match(setCookie, /Max-Age=28800/)
+    assert.match(setCookie, /Path=\//); assert.match(setCookie, /Max-Age=2592000/)
     const cookie = setCookie.split(';')[0]!
     // Model a production token issued before jti was added, signed with the same owner credential version.
     const currentPayload = JSON.parse(Buffer.from(cookie.slice(cookie.indexOf('=') + 1).split('.')[1]!, 'base64url').toString())
+    currentPayload.exp = currentPayload.iat + 28800
     delete currentPayload.jti
     const legacyToken = await new SignJWT(currentPayload).setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
       .sign(Uint8Array.from('a'.repeat(64).match(/../g)!, byte => parseInt(byte, 16)))

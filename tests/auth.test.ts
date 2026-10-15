@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SignJWT } from 'jose'
-import { createSession, hashPassword, secureEqual, SESSION_MAX_AGE, verifyPassword, verifySession } from '../server/security/auth.ts'
+import { createSession, hashPassword, LEGACY_SESSION_MAX_AGE, secureEqual, SESSION_MAX_AGE, verifyPassword, verifySession } from '../server/security/auth.ts'
 
 const password = 'a strong owner password'
 const now = new Date('2026-10-08T12:00:00Z')
@@ -41,13 +41,25 @@ test('malformed hashes fail closed instead of weakening the password derivation'
   }
 })
 
-test('owner sessions expire after eight hours and return only the owner identity', async () => {
+test('owner sessions persist for thirty days and return only the owner identity', async () => {
   const token = await createSession(config, now)
   assert.ok(token)
   const sessionId = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString()).jti as string
   assert.match(sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
   assert.deepEqual(await verifySession(token, config, now), { email: config.ownerEmail, sessionId })
+  assert.deepEqual(await verifySession(token, config, new Date(now.getTime() + SESSION_MAX_AGE * 1000 - 1000)), { email: config.ownerEmail, sessionId })
   assert.equal(await verifySession(token, config, new Date(now.getTime() + SESSION_MAX_AGE * 1000)), null)
+})
+
+test('existing eight-hour sessions remain valid until their original expiry', async () => {
+  const token = await createSession(config, now)
+  assert.ok(token)
+  const payload = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())
+  payload.exp = payload.iat + LEGACY_SESSION_MAX_AGE
+  const key = Uint8Array.from(config.sessionSecret.match(/../g)!, byte => parseInt(byte, 16))
+  const legacyDurationToken = await new SignJWT(payload).setProtectedHeader({ alg: 'HS256', typ: 'JWT' }).sign(key)
+  assert.equal((await verifySession(legacyDurationToken, config, now))?.email, config.ownerEmail)
+  assert.equal(await verifySession(legacyDurationToken, config, new Date(now.getTime() + LEGACY_SESSION_MAX_AGE * 1000)), null)
 })
 
 test('pre-jti sessions remain valid and receive a stable exact-token revocation id', async () => {
