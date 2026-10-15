@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 async function scheduleFixture(page: Page) {
   const today = new Date().toISOString().slice(0, 10)
   await page.route('**/api/subscriptions**', route => route.fulfill({ json: [

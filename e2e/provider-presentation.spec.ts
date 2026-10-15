@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 const today = new Date().toISOString().slice(0, 10)
 const capturedAt = new Date().toISOString()
 const periodStart = `${today.slice(0, 7)}-01`

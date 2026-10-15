@@ -30,7 +30,7 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     assert.equal((await document('/')).status, 303)
     for (const path of ['/services', '/services/', '/connections', '/history']) assert.equal((await document(path)).status, 303, path)
     assert.equal((await document('/unknown-route')).status, 401)
-    for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/api/supabase/connection', '/api/supabase/usage', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
+    for (const path of ['/favicon.svg', '/_nuxt/example.js', '/api/costs', '/api/connections', '/api/cloudflare/registrar', '/api/supabase/connection', '/api/supabase/usage', '/data/costs.json']) assert.equal((await request(path)).status, 401, path)
     for (const [method, path] of [
       ['POST', '/api/subscriptions?import=1'],
       ['PATCH', '/api/subscriptions/bitwarden?revision=1'],
@@ -71,6 +71,9 @@ test('Worker protects app/assets/API and supports single-owner registration, log
     }
     assert.equal((await request('/favicon.svg', { headers: { Cookie: cookie } })).status, 200)
     assert.equal((await request('/api/costs', { headers: { Cookie: cookie } })).status, 200)
+    const registrar = await request('/api/cloudflare/registrar', { headers: { Cookie: cookie } })
+    assert.equal(registrar.status, 200)
+    assert.deepEqual(await registrar.json(), { registrations: [], sync: { status: 'not-configured' } })
     const item = { id: 'api-bitwarden', name: 'Bitwarden', billingType: 'fixed', amount: 10, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'year', nextRenewalAt: '2026-10-08', status: 'active' }
     const jsonRequest = (path: string, method: string, value: unknown) => request(path, { method, headers: { Cookie: cookie, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify(value) })
     const connection = { credentials: { apiToken: 'test-hostinger-secret-never-return' }, revision: 0 }

@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 async function mockProviders(page: Page) {
   const providers = ['aws', 'cloudflare', 'openai', 'digitalocean', 'hostinger']
   await page.route('**/api/connections', route => route.fulfill({ json: Object.fromEntries(providers.map(provider => [provider, { configured: false, revision: 0 }])) }))
@@ -24,7 +28,7 @@ test('DUES-32 provider credential guidance is actionable and fits common viewpor
   await expect(supabase).toContainText('analytics_usage_read')
   const guidance = [
     ['Amazon Web Services', 'dedicated IAM principal', 'ce:GetCostAndUsage', 'Cost Explorer API permissions', 'https://docs.aws.amazon.com/cost-management/latest/userguide/ce-api.html'],
-    ['Cloudflare', 'Account → Billing → Read', 'billing permissions', 'https://developers.cloudflare.com/billing/understand/billing-permissions/'],
+    ['Cloudflare', 'Account → Billing → Read', 'Registrar read access', 'Cloudflare Registrar registrations API', 'https://developers.cloudflare.com/api/resources/registrar/subresources/registrations/methods/list'],
     ['OpenAI API', 'organization Admin API key', 'OpenAI organization costs API', 'https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs'],
     ['DigitalOcean', 'billing:read', 'finalized monthly invoices', 'DigitalOcean billing API and scopes', 'https://docs.digitalocean.com/platform/billing/reference/api/'],
     ['Hostinger', 'inherit their owner’s permissions', 'Manage Hostinger renewals', 'Hostinger API reference', 'https://developers.hostinger.com/'],

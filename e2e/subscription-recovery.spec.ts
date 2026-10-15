@@ -1,5 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 type Row = { id: string; name: string; provider?: string; billingType: 'fixed'; amount: number; currency: string; recurrenceInterval: number; recurrenceUnit: string; nextRenewalAt: string; status: string; revision: number }
 const today = new Date().toISOString().slice(0, 10)
 const row: Row = { id: 'subscription-1', name: 'Password Vault', billingType: 'fixed', amount: 12, currency: 'USD', recurrenceInterval: 1, recurrenceUnit: 'month', nextRenewalAt: today, status: 'active', revision: 1 }

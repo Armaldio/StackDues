@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 const widths = [320, 375, 768, 1366, 1440]
 const today = new Date().toISOString().slice(0, 10)
 const capturedAt = new Date().toISOString()

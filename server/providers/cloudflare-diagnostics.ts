@@ -1,4 +1,4 @@
-export type CloudflareCollectionStage = 'credentials' | 'billable_usage' | 'subscriptions'
+export type CloudflareCollectionStage = 'credentials' | 'billable_usage' | 'subscriptions' | 'registrar'
 export type CloudflareFailureKind = 'authorization' | 'timeout' | 'incomplete_response' | 'invalid_response' | 'request_failed' | 'provider_rejected' | 'configuration' | 'unknown' | `http_${number}`
 
 export type CloudflareCollectionFailureEvent = Readonly<{

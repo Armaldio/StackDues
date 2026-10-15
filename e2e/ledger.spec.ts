@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 async function mockLedger(page: Page, initial: Record<string, unknown>[] = [], mockCosts = true) {
   let subscriptions = initial
   const configured = mockCosts ? false : true

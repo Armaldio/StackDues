@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 async function fixture(page: Page, status: 'synced' | 'error', stale = false, partial = false) {
   const now = new Date(), today = now.toISOString().slice(0, 10)
   const lastSyncedAt = new Date(now.getTime() - (stale ? 7 * 86400000 : 0)).toISOString()

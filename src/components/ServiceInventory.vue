@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import type { StoredSubscription } from '../lib/subscription-api'
 import type { HostingerDiscoveryRow } from '../lib/hostinger-api'
+import type { CloudflareRegistration } from '../lib/cloudflare-registrar-api'
 import type { CostProvider } from '../domain/usage-costs'
 import type { ProviderPresentation } from '../domain/provider-presentation'
 
@@ -10,6 +11,7 @@ const props = defineProps<{
   subscriptions: StoredSubscription[]
   providers: InventoryProvider[]
   discovered: HostingerDiscoveryRow[]
+  registrarRegistrations: CloudflareRegistration[]
   blocked: boolean
   loading: boolean
   formatMoney: (amount: number | null, currency: string) => string
@@ -31,7 +33,8 @@ const normalizedQuery = computed(() => query.value.trim().toLocaleLowerCase())
 const visibleSubscriptions = computed(() => entryKind.value !== 'provider' && entryKind.value !== 'discovered' ? props.subscriptions.filter(item => (status.value === 'all' || item.status === status.value) && `${item.name} ${item.provider ?? ''} ${item.currency} ${item.status}`.toLocaleLowerCase().includes(normalizedQuery.value)) : [])
 const visibleProviders = computed(() => entryKind.value !== 'fixed' && entryKind.value !== 'discovered' ? props.providers.filter(item => `${item.name} ${item.id} ${item.status} ${item.summary} ${item.searchTerms ?? ''}`.toLocaleLowerCase().includes(normalizedQuery.value)) : [])
 const visibleDiscovered = computed(() => entryKind.value !== 'fixed' && entryKind.value !== 'provider' ? props.discovered.filter(item => !item.linkedSubscriptionId && `${item.name} Hostinger ${item.status} ${item.currency} ${item.renewalPrice ?? ''} ${item.excluded ? 'excluded uncounted' : item.renewalAvailable ? 'needs review uncounted' : 'unavailable uncounted'}`.toLocaleLowerCase().includes(normalizedQuery.value)) : [])
-const visibleCount = computed(() => visibleSubscriptions.value.length + visibleProviders.value.length + visibleDiscovered.value.length)
+const visibleRegistrations = computed(() => entryKind.value !== 'fixed' && entryKind.value !== 'provider' ? props.registrarRegistrations.filter(item => `${item.domainName} Cloudflare Registrar ${item.status} ${item.autoRenew ? 'auto renew enabled' : 'auto renew off'} ${item.expiresAt ?? ''}`.toLocaleLowerCase().includes(normalizedQuery.value)) : [])
+const visibleCount = computed(() => visibleSubscriptions.value.length + visibleProviders.value.length + visibleDiscovered.value.length + visibleRegistrations.value.length)
 function hostingerOrigin(id: string) {
   const linked = props.discovered.find(item => item.linkedSubscriptionId === id)
   if (linked?.automaticallyLinked) return 'Added automatically from the Hostinger connection.'
@@ -44,7 +47,7 @@ function timestamp(value?: string) { return value ? new Intl.DateTimeFormat(unde
 <template>
   <section class="service-inventory" aria-labelledby="inventory-heading">
     <div class="section-header"><div><p class="eyebrow">Everything you track</p><h2 id="inventory-heading">Services <span class="heading-count">{{ visibleCount }} entries</span></h2>
-        <ul class="inventory-counts" aria-label="Matching entry counts"><li>Fixed subscriptions <strong>{{ visibleSubscriptions.length }}</strong></li><li>Provider entries <strong>{{ visibleProviders.length }}</strong></li><li>Uncounted discoveries <strong>{{ visibleDiscovered.length }}</strong></li></ul>
+        <ul class="inventory-counts" aria-label="Matching entry counts"><li>Fixed subscriptions <strong>{{ visibleSubscriptions.length }}</strong></li><li>Provider entries <strong>{{ visibleProviders.length }}</strong></li><li>Uncounted discoveries <strong>{{ visibleDiscovered.length + visibleRegistrations.length }}</strong></li></ul>
       </div>
       <div class="table-tools inventory-tools"><label class="sr-only" for="service-search">Search services</label><input id="service-search" v-model="query" type="search" placeholder="Search services and providers" />
         <label class="sr-only" for="service-kind">Filter service entries by type</label><select id="service-kind" v-model="entryKind"><option value="all">All entry types</option><option value="fixed">Fixed subscriptions</option><option value="provider">Provider entries</option><option value="discovered">Uncounted discoveries</option></select>
@@ -53,7 +56,7 @@ function timestamp(value?: string) { return value ? new Intl.DateTimeFormat(unde
     </div>
     <p class="inventory-filter-note">Search and entry type apply to all entries. Subscription status applies to fixed subscriptions only.</p>
     <p v-if="loading" class="metric-note" role="status">Loading tracked services…</p>
-    <div v-else-if="visibleSubscriptions.length || visibleProviders.length || visibleDiscovered.length" class="inventory-groups" aria-label="Tracked services">
+    <div v-else-if="visibleSubscriptions.length || visibleProviders.length || visibleDiscovered.length || visibleRegistrations.length" class="inventory-groups" aria-label="Tracked services">
       <section v-if="visibleSubscriptions.length" class="inventory-group" aria-labelledby="fixed-inventory-heading">
       <h3 id="fixed-inventory-heading">Fixed subscriptions <span>{{ visibleSubscriptions.length }}</span></h3>
       <div class="inventory-grid" role="list" aria-label="Fixed subscriptions">
@@ -75,6 +78,17 @@ function timestamp(value?: string) { return value ? new Intl.DateTimeFormat(unde
       </article>
       </div>
       </section>
+      <section v-if="visibleRegistrations.length" class="inventory-group" aria-labelledby="registrar-inventory-heading">
+      <h3 id="registrar-inventory-heading">Cloudflare domain renewals · price unavailable <span>{{ visibleRegistrations.length }}</span></h3>
+      <div class="inventory-grid" role="list" aria-label="Cloudflare domain renewals, not included in financial totals">
+      <article v-for="item in visibleRegistrations" :key="`registrar-${item.domainName}`" class="inventory-card discovered-inventory-card" role="listitem">
+        <header><div><p class="eyebrow">Cloudflare Registrar</p><h3>{{ item.domainName }}</h3></div><span class="status-pill">{{ item.autoRenew ? 'Auto-renews' : 'Auto-renew off' }}</span></header>
+        <p>{{ item.seenInLatestSync ? `Registrar status · ${item.status}` : `Last known · sync unconfirmed (${item.status})` }}</p>
+        <dl><div><dt>Next renewal / expiry</dt><dd>{{ item.expiresAt ?? 'Date unavailable' }}</dd></div><div><dt>Renewal price</dt><dd>Unavailable from Cloudflare API</dd></div></dl>
+        <p class="inventory-note">This domain is tracked by its renewal date and auto-renew setting. No estimated amount is added to monthly totals or the payment schedule.</p>
+      </article>
+      </div>
+      </section>
       <section v-if="visibleDiscovered.length" class="inventory-group" aria-labelledby="discovered-inventory-heading">
       <h3 id="discovered-inventory-heading">Hostinger discoveries · not counted <span>{{ visibleDiscovered.length }}</span></h3>
       <div class="inventory-grid" role="list" aria-label="Uncounted Hostinger discoveries">
@@ -88,7 +102,7 @@ function timestamp(value?: string) { return value ? new Intl.DateTimeFormat(unde
       </section>
     </div>
     <p v-else class="quiet-empty" role="status">No entries match your search, entry type, or subscription status filter.</p>
-    <p class="inventory-note">Unlinked Hostinger discoveries need review and are not counted. Linked services appear once as the saved subscription.</p>
+    <p class="inventory-note">Cloudflare domains stay outside financial totals because their renewal price is unavailable. Unlinked Hostinger discoveries need review; linked services appear once as the saved subscription.</p>
   </section>
 </template>
 

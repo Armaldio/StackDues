@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 const observation = {
   id: 'supabase-usage-1', organizationSlug: 'team-stackdues', projectRef: 'abcdefghijklmnopqrst', projectName: 'Main app', interval: '1day',
   observedAt: '2026-10-12T00:00:00.000Z', capturedAt: '2026-10-13T12:00:00.000Z',

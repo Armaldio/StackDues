@@ -14,21 +14,21 @@ const providers: ConnectionProvider[] = ['aws', 'cloudflare', 'openai', 'digital
 const names = { aws: 'Amazon Web Services', cloudflare: 'Cloudflare', hostinger: 'Hostinger', openai: 'OpenAI API', digitalocean: 'DigitalOcean' }
 const coverage: Record<ConnectionProvider, string> = {
   aws: 'Actual usage, comparable period and full-month forecast when available; invoices are not imported',
-  cloudflare: 'Billing-period actuals and service breakdown; no full-month forecast or invoice import',
+  cloudflare: 'Billing-period actuals and service breakdown; Registrar renewal dates and auto-renew when permitted; no full-month forecast or invoice import',
   hostinger: 'Fixed renewal price, recurrence, auto-renewal and next billing date; invoices are not imported',
   openai: 'Organization-reported API costs by day and currency; no invoice finality or forecast',
   digitalocean: 'Finalized monthly invoice totals in USD; previews, balance and usage estimates are excluded',
 }
 const permissions: Record<ConnectionProvider, string> = {
   aws: 'Cost Explorer read-only access',
-  cloudflare: 'Account billing read access',
+  cloudflare: 'Account billing read access; Registrar read access for domain renewal details',
   hostinger: 'Read-only access to the subscription list',
   openai: 'Organization Admin API key with organization cost read access',
   digitalocean: 'Personal access token with billing:read permission',
 }
 const setupGuidance: Record<ConnectionProvider, { instruction: string; docs: string; docsLabel: string }> = {
   aws: { instruction: 'Create a dedicated IAM principal for this connection. Grant only ce:GetCostAndUsage and ce:GetCostForecast; its access key can read cost usage and forecast data, not manage AWS resources.', docs: 'https://docs.aws.amazon.com/cost-management/latest/userguide/ce-api.html', docsLabel: 'AWS Cost Explorer API permissions' },
-  cloudflare: { instruction: 'In My Profile → API Tokens, create a custom token scoped to this account with Account → Billing → Read. Copy the account ID from the account dashboard.', docs: 'https://developers.cloudflare.com/billing/understand/billing-permissions/', docsLabel: 'Cloudflare billing permissions' },
+  cloudflare: { instruction: 'In My Profile → API Tokens, create a custom token scoped to this account with Account → Billing → Read and Registrar read access. Copy the account ID from the account dashboard. Registrar discovery covers domains registered through Cloudflare Registrar, and reads expiry and auto-renew status; domains using Cloudflare DNS but registered elsewhere, renewal prices and invoices are not available from that API.', docs: 'https://developers.cloudflare.com/api/resources/registrar/subresources/registrations/methods/list', docsLabel: 'Cloudflare Registrar registrations API' },
   hostinger: { instruction: 'Create an API token in Hostinger hPanel for the account whose subscriptions you want to track. Hostinger says tokens inherit their owner’s permissions and does not document a billing-read-only scope; its API also exposes renewal actions. Only use a token if the owner account’s permissions are acceptable. If your account roles can limit access, use a dedicated account; revoke the token when it is no longer needed.', docs: 'https://developers.hostinger.com/', docsLabel: 'Hostinger API reference' },
   openai: { instruction: 'An organization Admin API key is required for organization costs; a standard project API key will not work. Admin keys can read organization administration data, so use a dedicated, expiring key and limit access to trusted organization administrators.', docs: 'https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs', docsLabel: 'OpenAI organization costs API' },
   digitalocean: { instruction: 'Create a personal access token with the custom billing:read scope only. StackDues imports finalized monthly invoices in USD; previews, balances, and usage estimates are excluded.', docs: 'https://docs.digitalocean.com/platform/billing/reference/api/', docsLabel: 'DigitalOcean billing API and scopes' },

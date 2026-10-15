@@ -6,15 +6,17 @@ import hostingerCommitmentMigration from '../../migrations/0005_hostinger_auto_c
 import openAiMigration from '../../migrations/0006_openai_costs.sql'
 import digitalOceanMigration from '../../migrations/0007_digitalocean_billing.sql'
 import cloudflareFixedMigration from '../../migrations/0010_cloudflare_fixed_commitments.sql'
+import cloudflareRegistrarMigration from '../../migrations/0011_cloudflare_registrar.sql'
 import { LedgerError, createStoredSubscription, deleteStoredSubscription, listSubscriptions, patchStoredSubscription, readCostFeed } from '../../server/data/ledger.ts'
 import { cloudflareDeleteExclusionStatement, cloudflareEditStatement } from '../../server/data/cloudflare-commitments.ts'
+import { readCloudflareRegistrarDiscovery } from '../../server/data/cloudflare-registrar.ts'
 import { syncCosts, type CostSyncDependencies } from '../../server/worker-sync.ts'
 import type { loadProviderCredentials } from '../../server/security/provider-credentials.ts'
 
 const awsCredentials = { accessKeyId: 'TESTACCESSKEY', secretAccessKey: 'TEST_FAKE_AWS_SECRET' }
 const cloudflareCredentials = { accountId: '023e105f4ecef8ad9ca31a8372d0c353', apiToken: 'TEST_FAKE_CLOUDFLARE_TOKEN' }
 const openAiCredentials = { adminApiKey: 'TEST_OPENAI_ADMIN_KEY' }
-type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-subscription-not-found' | 'cloudflare-both-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'cloudflare-credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare'
+type Mode = 'missing' | 'success' | 'aws-error' | 'cloudflare-error' | 'cloudflare-subscription-error' | 'cloudflare-subscription-not-found' | 'cloudflare-both-error' | 'cloudflare-updated' | 'cloudflare-trial' | 'openai-error' | 'digitalocean-error' | 'credential-error' | 'cloudflare-credential-error' | 'timeout' | 'malformed' | 'empty-cloudflare' | 'registrar-error'
 
 // Local-only fixture. Neither the SDK client nor fetch can contact real providers.
 export default {
@@ -22,11 +24,12 @@ export default {
     const input = await request.json() as { action: string; mode?: Mode; now?: string; sql?: string; providers?: ('aws' | 'cloudflare' | 'openai' | 'digitalocean')[]; id?: string; revision?: number; subscription?: any }
     try {
       if (input.action === 'initialize') {
-        for (const sql of [migration, credentialMigration, hostingerMigration, hostingerCommitmentMigration, openAiMigration, digitalOceanMigration, cloudflareFixedMigration]) await env.DB.exec(sql.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
+        for (const sql of [migration, credentialMigration, hostingerMigration, hostingerCommitmentMigration, openAiMigration, digitalOceanMigration, cloudflareFixedMigration, cloudflareRegistrarMigration]) await env.DB.exec(sql.replace(/^--.*$/gm, '').replace(/\r?\n/g, ' ').replace(/;\s*(?=CREATE)/g, ';\n'))
         return Response.json({ ready: true })
       }
       if (input.action === 'sql') { await env.DB.exec(input.sql!); return Response.json({ ready: true }) }
       if (input.action === 'costs') return Response.json(await readCostFeed(env.DB))
+      if (input.action === 'registrar') return Response.json(await readCloudflareRegistrarDiscovery(env.DB))
       if (input.action === 'subscriptions') return Response.json(await listSubscriptions(env.DB))
       if (input.action === 'create-subscription') return Response.json(await createStoredSubscription(env.DB, input.subscription))
       if (input.action === 'edit-subscription') return Response.json(await patchStoredSubscription(env.DB, input.id!, input.subscription, input.revision, (item, revision) => cloudflareEditStatement(env.DB, item, revision)))
@@ -65,6 +68,11 @@ export default {
             if ((init?.headers as Record<string, string>).Authorization !== 'Bearer TEST_DIGITALOCEAN_TOKEN') throw new Error('Unexpected fake credentials')
             if (mode === 'digitalocean-error') return new Response('TEST_DIGITALOCEAN_TOKEN denied', { status: 403 })
             return Response.json({ invoices: mode === 'missing' ? [] : [{ invoice_uuid: 'TEST_INVOICE_UUID', invoice_id: '2026-09', invoice_period: '2026-09', amount: '18.40' }], invoice_preview: { amount: '999999' } })
+          }
+          if (String(_url).includes('/registrar/registrations')) {
+            if ((init?.headers as Record<string, string>).Authorization !== `Bearer ${cloudflareCredentials.apiToken}`) throw new Error('Unexpected fake credentials')
+            if (mode === 'registrar-error') return new Response('TEST_FAKE_CLOUDFLARE_TOKEN denied', { status: 403 })
+            return Response.json({ success: true, result: [{ domain_name: 'example.com', status: 'active', expires_at: '2027-04-02T00:00:00Z', auto_renew: true, registrant_contact: { email: 'private@example.com' } }], result_info: { count: 1, per_page: 50, cursor: '' } })
           }
           calls.cloudflare++
           if ((init?.headers as Record<string, string>).Authorization !== `Bearer ${cloudflareCredentials.apiToken}`) throw new Error('Unexpected fake credentials')

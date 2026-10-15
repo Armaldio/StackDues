@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 import { AxeBuilder } from '@axe-core/playwright'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/cloudflare/registrar', route => route.fulfill({ json: { registrations: [], sync: { status: 'not-configured' } } }))
+})
+
 const routes = [
   { path: '/', name: 'overview' },
   { path: '/services', name: 'services' },

@@ -18,6 +18,7 @@ import { hostingerCoverage, hostingerFreshness } from './domain/hostinger-covera
 import { currencyUsageNote, missingForecastLabel, providerStatusPresentation, type CurrencyProviderCoverage } from './domain/provider-presentation'
 import { ConnectionApiError, fetchConnections, type ConnectionStatuses } from './lib/connection-api'
 import { HostingerApiError, readHostingerDiscovery, type HostingerDiscovery as HostingerState } from './lib/hostinger-api'
+import { CloudflareRegistrarApiError, readCloudflareRegistrarDiscovery, type CloudflareRegistrarDiscovery as CloudflareRegistrarState } from './lib/cloudflare-registrar-api'
 import { createStoredSubscription, deleteStoredSubscription, fetchSubscriptions, importStoredSubscriptions, serializeSubscriptionExport, SUBSCRIPTION_EXPORT_FILENAME, SubscriptionRequestFailure, updateStoredSubscription, type StoredSubscription, type ImportResult } from './lib/subscription-api'
 import { failedReadState, successfulReadState, type DataReadState } from './domain/data-read-state'
 
@@ -34,6 +35,9 @@ const hostingerReadState = ref<DataReadState>('pending')
 const hostingerReadAt = ref<string>()
 const hostingerReadError = ref('')
 const hostingerStateResolved = ref(false)
+const cloudflareRegistrarState = ref<CloudflareRegistrarState>()
+const cloudflareRegistrarResolved = ref(false)
+const cloudflareRegistrarReadError = ref('')
 const connectionStatuses = ref<ConnectionStatuses>()
 const hostingerState = ref<HostingerState>()
 const router = useRouter()
@@ -56,7 +60,7 @@ const subscriptionsReadAt = ref<string>()
 const subscriptionsReadState = ref<DataReadState>('pending')
 const blocked = computed(() => loading.value || busy.value || !loaded.value || storageError.value !== null)
 function readIsExpired(cause: unknown) {
-  return (cause instanceof CostFeedReadError || cause instanceof ConnectionApiError || cause instanceof HostingerApiError) && cause.status === 401
+  return (cause instanceof CostFeedReadError || cause instanceof ConnectionApiError || cause instanceof HostingerApiError || cause instanceof CloudflareRegistrarApiError) && cause.status === 401
     || cause instanceof Error && ('kind' in cause && cause.kind === 'session' || cause.message.includes('Your session expired.'))
 }
 function readTime(value?: string) { return value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '' }
@@ -95,6 +99,7 @@ onMounted(() => {
   void fetchCostFeed('/api/costs').then(feed => { setCostFeed(feed); financialRefreshError.value = ''; costFeedReadError.value = '' }).catch(cause => { costFeedReadState.value = failedReadState(!!costFeedReadAt.value, readIsExpired(cause)); costFeedReadError.value = cause instanceof Error ? cause.message : 'Saved billing data could not be loaded.' })
   void fetchConnections().then(statuses => { connectionStatuses.value = statuses; connectionReadState.value = successfulReadState(true); connectionReadAt.value = new Date().toISOString() }).catch(cause => { connectionStatusesError.value = true; connectionReadState.value = failedReadState(!!connectionReadAt.value, readIsExpired(cause)) }).finally(() => { connectionStatusesResolved.value = true })
   void readHostingerDiscovery().then(setHostingerState).catch(cause => { hostingerReadState.value = failedReadState(!!hostingerReadAt.value, readIsExpired(cause)); hostingerReadError.value = cause instanceof Error ? cause.message : 'Hostinger services could not be loaded.' }).finally(() => { hostingerStateResolved.value = true })
+  void readCloudflareRegistrarDiscovery().then(setCloudflareRegistrarState).catch(cause => { cloudflareRegistrarReadError.value = cause instanceof Error ? cause.message : 'Cloudflare domain renewals could not be loaded.' }).finally(() => { cloudflareRegistrarResolved.value = true })
   normalizeLegacyHash(route.value.hash)
   void focusPaymentScheduleTarget()
   if (!routeSections[route.value.path]) void router.replace('/')
@@ -123,6 +128,7 @@ async function refreshPersistedFinancialData(force = false) {
     fetchCostFeed('/api/costs'),
     readHostingerDiscovery(),
     fetchConnections(),
+    readCloudflareRegistrarDiscovery(),
   ]).then(results => {
     if (revision !== financialReadRevision) return
     if (results[0]!.status === 'fulfilled') {
@@ -137,6 +143,8 @@ async function refreshPersistedFinancialData(force = false) {
     }
     if (results[2]!.status === 'fulfilled') setConnectionStatuses(results[2]!.value)
     else { connectionStatusesError.value = true; connectionReadState.value = failedReadState(!!connectionReadAt.value, readIsExpired(results[2]!.reason)) }
+    if (results[3]!.status === 'fulfilled') setCloudflareRegistrarState(results[3]!.value)
+    else cloudflareRegistrarReadError.value = results[3]!.reason instanceof Error ? results[3]!.reason.message : 'Cloudflare domain renewals could not be loaded.'
     financialRefreshError.value = results.slice(0, 2).some(result => result.status === 'rejected')
       ? ['retained', 'retained-expired'].includes(costFeedReadState.value) || ['retained', 'retained-expired'].includes(hostingerReadState.value)
         ? 'Saved billing data could not be checked. Previously displayed observations remain available.'
@@ -255,7 +263,12 @@ const serviceProviders = computed(() => [
     const latestCapture = Math.max(...currentCostSnapshots(costFeed.value).filter(row => row.provider === provider).map(row => Date.parse(row.capturedAt)))
     const forecasts = currentCostSnapshots(costFeed.value).filter(row => row.provider === provider && row.kind === 'forecast' && Date.parse(row.capturedAt) === latestCapture)
       .map(row => `Full-month forecast (includes actuals) · ${money(row.amount, row.currency)}`).join(' · ')
-    const summary = [reported, provider === 'digitalocean' ? '' : forecasts].filter(Boolean).join(' · ') || (state.status === 'error' ? 'Last sync failed; last known usage may be available in details.' : state.status === 'synced' ? provider === 'digitalocean' ? 'Checked successfully; no finalized invoice total is available.' : 'Checked successfully; no current usage report.' : hasCostReadFailure.value ? 'Usage data could not be loaded; current usage is unavailable.' : state.status === 'not-configured' ? 'Usage not connected; no reported amount.' : 'Usage data is pending.')
+    const registrarSync = cloudflareRegistrarState.value?.sync
+    const registrarNote = provider !== 'cloudflare' ? '' : cloudflareRegistrarReadError.value ? 'Cloudflare domain renewal details could not be loaded; previously saved details are retained.'
+      : registrarSync?.status === 'error' ? 'Cloudflare domain check failed; previously discovered renewals are retained. Check Registrar read access.'
+        : registrarSync?.status === 'synced' ? registrarSync && cloudflareRegistrarState.value?.registrations.length ? `${cloudflareRegistrarState.value.registrations.length} domain renewal(s) tracked by expiry and auto-renew; renewal prices are unavailable and excluded from totals.` : 'No Cloudflare Registrar domains were found.'
+          : connectionStatuses.value?.cloudflare.configured ? 'Domain renewal discovery is pending; check that the token includes Registrar read access.' : 'Cloudflare Registrar domain discovery requires a Cloudflare connection.'
+    const summary = [reported, provider === 'digitalocean' ? '' : forecasts, registrarNote].filter(Boolean).join(' · ') || (state.status === 'error' ? 'Last sync failed; last known usage may be available in details.' : state.status === 'synced' ? provider === 'digitalocean' ? 'Checked successfully; no finalized invoice total is available.' : 'Checked successfully; no current usage report.' : hasCostReadFailure.value ? 'Usage data could not be loaded; current usage is unavailable.' : state.status === 'not-configured' ? 'Usage not connected; no reported amount.' : 'Usage data is pending.')
     const presentation = providerStatusPresentation({ configured: connectionStatuses.value?.[provider].configured ?? (connectionReadState.value === 'pending' || connectionStatusesError.value && !connectionStatuses.value ? undefined : state.status !== 'not-configured'), syncStatus: state.status, hasObservation: rows.length > 0, stale: isProviderStale(state), readState: connectionReadState.value === 'pending' ? 'pending' : costFeedReadState.value, readAt: costFeedReadAt.value })
     return { id: provider, name: providerName(provider), status: state.status, presentation, lastSyncedAt: state.lastSyncedAt, summary, searchTerms: serviceNames.join(' ') }
   }),
@@ -514,6 +527,7 @@ function setConnectionStatuses(statuses: ConnectionStatuses) { financialReadRevi
 function applyCostFeed(feed: typeof costFeed.value) { costFeed.value = feed }
 function setCostFeed(feed: typeof costFeed.value) { financialReadRevision++; applyCostFeed(feed); costFeedReadState.value = successfulReadState(feed.snapshots.length > 0); costFeedReadAt.value = new Date().toISOString(); costFeedReadError.value = '' }
 function setHostingerState(state: HostingerState) { financialReadRevision++; hostingerState.value = state; hostingerReadState.value = successfulReadState(state.subscriptions.length > 0); hostingerReadAt.value = new Date().toISOString(); hostingerReadError.value = '' }
+function setCloudflareRegistrarState(state: CloudflareRegistrarState) { financialReadRevision++; cloudflareRegistrarState.value = state; cloudflareRegistrarReadError.value = '' }
 
 </script>
 
@@ -613,7 +627,7 @@ function setHostingerState(state: HostingerState) { financialReadRevision++; hos
         <p v-if="subscriptionsReadState === 'pending'" role="status">Checking saved subscriptions…</p>
         <p v-if="exportError" class="error-message" role="alert">{{ exportError }}</p>
         <div v-if="loaded && !subscriptions.length" class="subscriptions-empty"><h3>No fixed subscriptions yet</h3><p>Provider usage and unlinked Hostinger discoveries appear in the services inventory below; add a service to track fixed renewals.</p></div>
-        <ServiceInventory v-if="loaded" v-model:query="search" v-model:status="statusFilter" :subscriptions="subscriptions" :providers="serviceProviders" :discovered="hostingerInventoryRows" :blocked="blocked" :loading="loading || connectionReadState === 'pending' || costFeedReadState === 'pending' || !hostingerStateResolved" :format-money="(amount, currency) => amount === null ? 'Price unavailable' : money(amount, currency)" :recurrence="recurrence" :monthly="item => normalizeCost(item).monthly" :renewal="item => nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—'" @details="openServiceDetails($event)" @edit="openForm" @toggle="setStatus" @remove="remove" @review="openHostingerManagement" />
+        <ServiceInventory v-if="loaded" v-model:query="search" v-model:status="statusFilter" :subscriptions="subscriptions" :providers="serviceProviders" :discovered="hostingerInventoryRows" :registrar-registrations="cloudflareRegistrarState?.registrations ?? []" :blocked="blocked" :loading="loading || connectionReadState === 'pending' || costFeedReadState === 'pending' || !hostingerStateResolved || !cloudflareRegistrarResolved" :format-money="(amount, currency) => amount === null ? 'Price unavailable' : money(amount, currency)" :recurrence="recurrence" :monthly="item => normalizeCost(item).monthly" :renewal="item => nextRenewalOnOrAfter(item, today) ? dateLabel(nextRenewalOnOrAfter(item, today)!) : '—'" @details="openServiceDetails($event)" @edit="openForm" @toggle="setStatus" @remove="remove" @review="openHostingerManagement" />
       </section>
       <LegacyImport v-if="loaded" :disabled="blocked" :existing-subscriptions="subscriptions" :import-subscriptions="importLedger" />
       <p v-if="!hostingerStateResolved" role="status">Checking saved Hostinger services…</p>
